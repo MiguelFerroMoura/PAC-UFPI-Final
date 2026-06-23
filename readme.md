@@ -157,7 +157,7 @@ Dashboard acompanha execução
 
 ```bash
 git clone <url-do-repositorio>
-cd pac
+cd PAC-UFPI-Final
 ```
 
 ---
