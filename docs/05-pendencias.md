@@ -22,7 +22,7 @@ Estes itens quebram funcionalidades já escritas.
 | B1 | `Validacao.objects.create(item=item, ...)` usa o kwarg `item`, mas o campo do modelo é **`item_demanda`**. Ocorre nas duas ações (validar e devolver). | [`validacoes/views.py`](../pac/apps/validacoes/views.py) vs [`validacoes/models.py`](../pac/apps/validacoes/models.py) | O fluxo de validação **lança exceção** ao gravar. |
 | B2 | **Duas definições divergentes** de `StatusDemanda`: em [`demandas/models.py`](../pac/apps/demandas/models.py) os valores são minúsculos (`"rascunho"`, sem `VINCULADA_DFD`, com `CANCELADA`); em [`demandas/constants.py`](../pac/apps/demandas/constants.py) são maiúsculos (`"RASCUNHO"`, com `VINCULADA_DFD`, sem `CANCELADA`). As views importam a versão de `models.py`. | `demandas/models.py`, `demandas/constants.py` | Inconsistência de dados; a máquina de transições de `constants.py` não casa com os valores persistidos. |
 | B3 | A máquina de estados `pode_transicionar_status()` / `TRANSICOES_STATUS_DEMANDA` **nunca é usada**. As views alteram `status` diretamente, sem validar transição. | `demandas/constants.py`, `demandas/views.py`, `validacoes/views.py` | Transições inválidas não são barradas. |
-| B4 | Banco configurado como **SQLite** em `settings.py`, contradizendo README, `.env.example` e `docker-compose.yml` (PostgreSQL). O bloco `DATABASES` ignora as variáveis `DB_*`. | [`config/settings.py`](../pac/config/settings.py) | Ambiente real diverge do planejado; `psycopg2` instalado mas não usado. |
+| ~~B4~~ | **Resolvido.** O projeto adotou **SQLite** como banco oficial (dev e produção). PostgreSQL, `docker-compose.yml`, `psycopg2` e as variáveis `DB_*` foram removidos; não há mais divergência. | [`config/settings.py`](../pac/config/settings.py) | — |
 | B5 | `Demanda.save()` é um override **no-op** com comentário indicando que deveria ter sido removido. | `demandas/models.py` | Código morto / confuso. |
 | B6 | Endpoints de `usuarios` retornam **JSON sem `@login_required`** e sem checagem de perfil; `ativar`/`desativar` alteram estado via **GET** (sem CSRF/POST). | [`usuarios/views.py`](../pac/apps/usuarios/views.py) | Falha de segurança/controle de acesso (fere RN10). |
 
@@ -163,18 +163,18 @@ Todos ❌ (app `dashboard` só renderiza página estática):
 
 | # | Pendência | Detalhe |
 |---|---|---|
-| T1 | Trocar SQLite → PostgreSQL | Ajustar `DATABASES` para usar as variáveis `DB_*` do `.env` (ver B4). |
+| ~~T1~~ | ~~Trocar SQLite → PostgreSQL~~ | **Cancelado.** SQLite foi adotado como banco oficial (ver B4). |
 | T2 | Unificar `StatusDemanda` | Uma única fonte de verdade e adotar a máquina de transições (ver B2/B3). |
 | T3 | Camada de serviços | Extrair lógica de consolidação/soma das views (docstring do DFD prevê `services`). |
 | T4 | Auditoria automática | Implementar signals/serviço que gravem `LogAuditoria`. |
 | T5 | Notificações por e-mail | Configurar backend de e-mail (`EMAIL_*` em settings) e disparos. |
 | T6 | Exportações | Adicionar biblioteca(s) para PDF e Excel/XLS. |
 | T7 | Registro no Django Admin | Registrar `Unidade`, `GrupoContratacao`, `ItemCatalogo`, `Validacao`, `LogAuditoria` (hoje só `Usuario`, `Demanda`, `DFD`). |
-| T8 | Rotas/telas faltantes | `dashboard`, `catalogo`, `unidades`, `grupos`, `auditoria` têm `urls.py` vazio. |
-| T9 | Testes automatizados | Todos os `tests.py` estão vazios; sem cobertura. |
+| T8 | Rotas/telas | **Migrado para o React.** As telas passaram a ser servidas pela SPA (`frontend/`) consumindo a API `/api/`; os `urls.py` server-side vazios tornaram-se legado. |
+| T9 | Testes automatizados | **Parcial.** Há testes da API (`apps/api/tests.py`) e do front-end React (Vitest). Falta cobrir os apps de domínio no back-end. |
 | T10 | Permissões por perfil | Substituir `is_staff` por checagem do campo `perfil` (USUÁRIO/ADMIN/ADMIN MASTER). |
 | T11 | Integração SIPAC/PGC | Marcada como **FUTURO** no PDF; ainda não iniciada. |
-| T12 | Configuração de produção | `DEBUG`, `SECRET_KEY`, `ALLOWED_HOSTS` e HTTPS para deploy (Render/Supabase). |
+| T12 | Configuração de produção | `DEBUG`, `SECRET_KEY`, `ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS` e HTTPS para deploy (imagem Docker + Gunicorn/WhiteNoise). |
 
 ---
 

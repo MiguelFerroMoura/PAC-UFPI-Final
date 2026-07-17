@@ -4,6 +4,13 @@ Este documento descreve os padrões adotados no projeto, separados em
 **padrões do Django** (convenções do framework) e **padrões de projeto**
 (*design patterns* clássicos e do ecossistema Django).
 
+> **Nota de arquitetura:** o front-end passou a ser uma **SPA React** que consome
+> a **API REST** (`apps/api`, Django REST Framework). Os padrões de *template*
+> descritos abaixo (MTV, herança de `base.html`) referem-se à camada server-side
+> **legada** — mantida como referência. No back-end atual, a camada de
+> apresentação é substituída por **serializers + viewsets** do DRF, e a
+> renderização das telas ocorre no React (`frontend/`).
+
 ---
 
 ## 1. Padrões do Django

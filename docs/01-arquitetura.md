@@ -10,20 +10,20 @@ Contratações (PAC) da Universidade Federal do Piauí (UFPI).
 
 ## 1. Visão geral
 
-O PAC UFPI é uma **aplicação web monolítica** construída em **Django** com
-renderização *server-side* (HTML via templates + Bootstrap 5). O objetivo é
-centralizar o cadastro, a validação, a consolidação e o acompanhamento das
-demandas do Plano Anual de Contratações.
+O PAC UFPI é uma aplicação web **desacoplada**: um **back-end Django** que expõe
+uma **API REST** (Django REST Framework) e um **front-end React (SPA)** que a
+consome. O objetivo é centralizar o cadastro, a validação, a consolidação e o
+acompanhamento das demandas do Plano Anual de Contratações.
 
 Características arquiteturais principais:
 
-- **Monolítica** — um único projeto/deploy Django.
-- **Modular por apps** — cada domínio de negócio é um app Django isolado.
-- **Padrão MTV (Model–Template–View)** — a variação do MVC adotada pelo Django.
-- **Server-side rendering** — as páginas são montadas no servidor; JavaScript é
-  usado de forma pontual (`static/js/main.js`).
-- **Autenticação baseada em sessão** com um modelo de usuário customizado
-  (`AUTH_USER_MODEL = 'usuarios.Usuario'`).
+- **Front-end desacoplado** — SPA em React (Vite), servida separadamente do
+  Django e comunicando-se apenas via API REST (`/api/`).
+- **Back-end monolítico modular** — um único projeto Django, com cada domínio
+  de negócio isolado em um app.
+- **API REST** — camada `apps/api` (serializers + viewsets do DRF).
+- **Autenticação baseada em sessão** (cookies + CSRF) com um modelo de usuário
+  customizado (`AUTH_USER_MODEL = 'usuarios.Usuario'`).
 
 ---
 
@@ -31,9 +31,9 @@ Características arquiteturais principais:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  Navegador (Bootstrap 5 + JS puro)                           │
+│  React SPA (Vite + Bootstrap 5) — consome /api/              │
 └──────────────────────────────────────────────────────────────┘
-                     │  HTTP (sessão + CSRF)
+                     │  HTTP/JSON (sessão + CSRF)
                      ▼
 ┌──────────────────────────────────────────────────────────────┐
 │  Middleware Django (Security, WhiteNoise, Session, CSRF,     │
@@ -59,7 +59,7 @@ Características arquiteturais principais:
                               ▼
                     ┌──────────────────┐
                     │ Banco de dados   │
-                    │ (SQLite / Postgres) │
+                    │ (SQLite)         │
                     └──────────────────┘
 ```
 
@@ -195,8 +195,9 @@ para os `urls.py` de cada app via `include()`:
 
 | Prefixo | App | Observação |
 |---|---|---|
+| `/api/` | `apps.api` | **API REST (consumida pela SPA React)** |
 | `/admin/` | Django Admin | Backoffice |
-| `/` | `dashboard.views.home` | Página inicial |
+| `/` | `dashboard.views.home` | Página inicial (legado server-side) |
 | `/login/`, `/logout/` | auth do Django | Sessão |
 | `/dashboard/` | `apps.dashboard` | **urls vazio** |
 | `/demandas/` | `apps.demandas` | Fluxo principal |
@@ -210,13 +211,21 @@ para os `urls.py` de cada app via `include()`:
 
 ---
 
-## 7. Frontend
+## 7. Frontend (React SPA)
 
-- **Templates Django** com herança a partir de `templates/base.html`.
-- **Bootstrap 5** e **Bootstrap Icons** carregados via CDN.
-- **JavaScript puro** em `static/js/main.js` (sem framework SPA).
-- **Django Messages Framework** para feedback ao usuário (sucesso/erro/aviso).
-- Servir de estáticos via **WhiteNoise** (`CompressedManifestStaticFilesStorage`).
+- **SPA em React 18** no diretório `frontend/`, construída com **Vite**.
+- **React Router** para roteamento no cliente; rotas protegidas por
+  autenticação (e por perfil staff quando aplicável) via `ProtectedRoute`.
+- **Bootstrap 5** e **Bootstrap Icons** (empacotados no build, sem CDN).
+- **Cliente de API** (`src/api/client.js`) usando `fetch` com
+  `credentials: 'include'` (cookie de sessão) e cabeçalho `X-CSRFToken`.
+- **Contexto de autenticação** (`src/auth/AuthContext.jsx`) que carrega o usuário
+  atual (`/api/auth/me/`) e expõe `login`/`logout`.
+- **Testes com Vitest + React Testing Library**, seguindo TDD.
+
+> Os templates Django server-side originais (`pac/templates/`) foram substituídos
+> pela SPA e permanecem apenas como referência/legado; o front-end oficial é o
+> React.
 
 ---
 
@@ -224,17 +233,14 @@ para os `urls.py` de cada app via `include()`:
 
 | Item | Tecnologia | Observação |
 |---|---|---|
-| Banco (dev) | **SQLite** | Configuração atual em `settings.py` |
-| Banco (planejado) | **PostgreSQL** | `docker-compose.yml`, `.env.example`, README |
-| Banco (MVP) | **Supabase** | Deploy inicial |
-| Aplicação | **Render** | Deploy inicial |
+| Banco (dev e produção) | **SQLite** | `settings.py` (`db.sqlite3`) |
 | WSGI | **Gunicorn** | Produção |
 | Estáticos | **WhiteNoise** | Sem CDN externo |
-| Containerização | **Docker Compose** | Sobe apenas o Postgres em dev |
+| Imagem de produção | **Docker** | Multi-stage: build React + app Django |
 
-> Atenção: há uma **divergência** entre a configuração de banco em
-> `settings.py` (SQLite) e o restante do planejamento (PostgreSQL). Registrado
-> em [`05-pendencias.md`](05-pendencias.md).
+O `Dockerfile` é **multi-stage**: um estágio Node gera o build do React; um
+estágio Python instala o Django, copia o build para `frontend_build/` (servido
+pelo WhiteNoise) e executa o Gunicorn.
 
 A infraestrutura definitiva deverá ser validada com a **STI/UFPI** conforme
 políticas institucionais de segurança, disponibilidade e gestão de dados.
@@ -243,13 +249,14 @@ políticas institucionais de segurança, disponibilidade e gestão de dados.
 
 ## 9. Decisões arquiteturais (resumo)
 
-1. **Monolito modular Django** — simplicidade de manutenção para a equipe, em
+1. **Front-end desacoplado (React SPA + API REST)** — separa responsabilidades e
+   permite evolução independente do front e do back.
+2. **Monolito modular Django** — simplicidade de manutenção para a equipe, em
    vez de microsserviços.
-2. **MTV server-side** — reduz complexidade de frontend; sem SPA.
-3. **Usuário customizado desde o início** — evita migração dolorosa de
+3. **SQLite** — banco único e sem dependências externas, para dev e produção.
+4. **Usuário customizado desde o início** — evita migração dolorosa de
    `AUTH_USER_MODEL` posteriormente.
-4. **Status por item** — flexibilidade no fluxo de validação (RN19).
-5. **Auditoria por referência explícita** — previsibilidade e simplicidade em
+5. **Status por item** — flexibilidade no fluxo de validação (RN19).
+6. **Auditoria por referência explícita** — previsibilidade e simplicidade em
    vez de `GenericForeignKey`.
-6. **REST pontual/futuro** — comunicação REST prevista apenas para ações
-   assíncronas e integrações futuras (ex.: SIPAC).
+7. **TDD no front-end** — testes escritos antes das telas React.
