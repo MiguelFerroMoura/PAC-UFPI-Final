@@ -232,6 +232,16 @@ class ValidacaoTests(APITestCase):
         self.item.refresh_from_db()
         self.assertEqual(self.item.status, StatusDemanda.DEVOLVIDA)
 
+    def test_transicao_invalida_rejeita(self):
+        self.item.status = StatusDemanda.RASCUNHO
+        self.item.save()
+        self.client.force_login(self.admin)
+        resp = self.client.post(
+            reverse("api:validacao-decidir"),
+            {"item_demanda": self.item.pk, "acao": "validado"},
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
 
 # =============================================================================
 # DFD
@@ -274,6 +284,17 @@ class DFDTests(APITestCase):
         self.item.refresh_from_db()
         self.assertEqual(self.item.status, StatusDemanda.CONSOLIDADA)
         self.assertEqual(Decimal(resp.data["total"]), Decimal("10"))
+
+    def test_consolidar_item_nao_validado_rejeita(self):
+        self.item.status = StatusDemanda.AGUARDANDO_VALIDACAO
+        self.item.save()
+        self.client.force_login(self.admin)
+        resp = self.client.post(
+            reverse("api:dfd-consolidar"),
+            {"numero": "DFD-002", "grupo": self.grupo.pk, "itens": [self.item.pk]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
 
 # =============================================================================

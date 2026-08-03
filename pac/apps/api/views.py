@@ -17,12 +17,14 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.catalogo.models import ItemCatalogo
+from apps.demandas.constants import pode_transicionar_status
 from apps.demandas.models import Demanda, ItemDemanda, StatusDemanda
 from apps.dfd.models import DFD
 from apps.grupos_contratacao.models import GrupoContratacao
 from apps.unidades.models import Unidade
 from apps.validacoes.models import TipoAcao, Validacao
 
+from .permissions import IsAdminUserPermission
 from .serializers import (
     DemandaSerializer,
     DFDSerializer,
@@ -121,7 +123,7 @@ class DemandaViewSet(viewsets.ModelViewSet):
         )
         user = self.request.user
         # Usuário comum só enxerga as próprias demandas (RN de visibilidade).
-        if not user.is_staff and getattr(user, "perfil", "usuario") == "usuario":
+        if not user.is_admin_user:
             qs = qs.filter(usuario=user)
         return qs
 
@@ -138,7 +140,7 @@ class DemandaViewSet(viewsets.ModelViewSet):
 
     def _pode_editar(self, demanda):
         user = self.request.user
-        return user.is_staff or demanda.usuario_id == user.id
+        return user.is_admin_user or demanda.usuario_id == user.id
 
     def update(self, request, *args, **kwargs):
         demanda = self.get_object()
@@ -191,6 +193,13 @@ class DemandaViewSet(viewsets.ModelViewSet):
                 {"detail": "Adicione pelo menos um item antes de enviar."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        if not pode_transicionar_status(demanda.status, StatusDemanda.AGUARDANDO_VALIDACAO):
+            return Response(
+                {"detail": f"Transição inválida de {demanda.status} para {StatusDemanda.AGUARDANDO_VALIDACAO}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         demanda.status = StatusDemanda.AGUARDANDO_VALIDACAO
         demanda.enviada_em = timezone.now()
         demanda.save(update_fields=["status", "enviada_em", "atualizado_em"])
@@ -204,13 +213,13 @@ class ItemDemandaViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = ItemDemanda.objects.select_related("demanda", "demanda__usuario")
         user = self.request.user
-        if not user.is_staff and getattr(user, "perfil", "usuario") == "usuario":
+        if not user.is_admin_user:
             qs = qs.filter(demanda__usuario=user)
         return qs
 
     def _pode_editar(self, item):
         user = self.request.user
-        return user.is_staff or item.demanda.usuario_id == user.id
+        return user.is_admin_user or item.demanda.usuario_id == user.id
 
     def update(self, request, *args, **kwargs):
         item = self.get_object()
@@ -219,9 +228,9 @@ class ItemDemandaViewSet(viewsets.ModelViewSet):
                 {"detail": "Você não tem permissão para editar este item."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        if item.demanda.status != StatusDemanda.RASCUNHO:
+        if item.demanda.status != StatusDemanda.RASCUNHO and item.status != StatusDemanda.DEVOLVIDA:
             return Response(
-                {"detail": "Itens só podem ser editados enquanto em rascunho."},
+                {"detail": "Itens só podem ser editados em rascunho ou devolvidos."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return super().update(request, *args, **kwargs)
@@ -234,15 +243,11 @@ class ItemDemandaViewSet(viewsets.ModelViewSet):
 class ValidacaoViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Validacao.objects.select_related("usuario", "item_demanda").all()
     serializer_class = ValidacaoSerializer
+    permission_classes = [IsAuthenticated, IsAdminUserPermission]
 
     @action(detail=False, methods=["get"])
     def pendentes(self, request):
         """Itens aguardando validação (acesso restrito a administradores)."""
-        if not request.user.is_staff:
-            return Response(
-                {"detail": "Acesso restrito a administradores."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
         itens = ItemDemanda.objects.filter(
             status=StatusDemanda.AGUARDANDO_VALIDACAO
         ).select_related("demanda", "demanda__unidade", "demanda__usuario")
@@ -251,12 +256,6 @@ class ValidacaoViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=["post"])
     def decidir(self, request):
         """Valida ou devolve um item de demanda."""
-        if not request.user.is_staff:
-            return Response(
-                {"detail": "Acesso restrito a administradores."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
         item_id = request.data.get("item_demanda")
         acao = request.data.get("acao")
         comentario = request.data.get("comentario", "")
@@ -269,20 +268,27 @@ class ValidacaoViewSet(viewsets.ReadOnlyModelViewSet):
             )
 
         if acao == TipoAcao.VALIDADO:
-            item.status = StatusDemanda.VALIDADA
+            novo_status = StatusDemanda.VALIDADA
         elif acao == TipoAcao.DEVOLVIDO:
             if not comentario:
                 return Response(
                     {"detail": "Comentário é obrigatório para devolução."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            item.status = StatusDemanda.DEVOLVIDA
+            novo_status = StatusDemanda.DEVOLVIDA
         else:
             return Response(
                 {"detail": "Ação inválida. Use 'validado' ou 'devolvido'."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        if not pode_transicionar_status(item.status, novo_status):
+            return Response(
+                {"detail": f"Transição de status inválida de {item.status} para {novo_status}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        item.status = novo_status
         item.save(update_fields=["status", "atualizado_em"])
         validacao = Validacao.objects.create(
             item_demanda=item,
@@ -306,15 +312,11 @@ class DFDViewSet(viewsets.ModelViewSet):
         .all()
     )
     serializer_class = DFDSerializer
+    permission_classes = [IsAuthenticated, IsAdminUserPermission]
 
     @action(detail=False, methods=["get"])
     def disponiveis(self, request):
         """Itens validados ainda não vinculados a nenhum DFD."""
-        if not request.user.is_staff:
-            return Response(
-                {"detail": "Acesso restrito a administradores."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
         itens = (
             ItemDemanda.objects.filter(status=StatusDemanda.VALIDADA)
             .exclude(dfds__isnull=False)
@@ -325,12 +327,6 @@ class DFDViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["post"])
     def consolidar(self, request):
         """Cria um DFD a partir de itens validados selecionados."""
-        if not request.user.is_staff:
-            return Response(
-                {"detail": "Acesso restrito a administradores."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
         numero = request.data.get("numero")
         grupo_id = request.data.get("grupo")
         item_ids = request.data.get("itens") or []
@@ -341,6 +337,14 @@ class DFDViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        itens_qs = ItemDemanda.objects.filter(id__in=item_ids)
+        for item in itens_qs:
+            if not pode_transicionar_status(item.status, StatusDemanda.CONSOLIDADA):
+                return Response(
+                    {"detail": f"Item #{item.id} em status '{item.status}' não pode ser consolidado."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
         dfd = DFD.objects.create(
             numero=numero,
             grupo_id=grupo_id,
@@ -349,9 +353,7 @@ class DFDViewSet(viewsets.ModelViewSet):
             observacao=request.data.get("observacao", ""),
         )
         dfd.itens_demanda.set(item_ids)
-        ItemDemanda.objects.filter(id__in=item_ids).update(
-            status=StatusDemanda.CONSOLIDADA
-        )
+        itens_qs.update(status=StatusDemanda.CONSOLIDADA)
         return Response(
             DFDSerializer(dfd).data, status=status.HTTP_201_CREATED
         )
