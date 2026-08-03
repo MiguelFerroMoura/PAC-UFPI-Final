@@ -32,7 +32,7 @@ def validar_item(request, item_pk):
         if acao == "validar":
             item.status = StatusDemanda.VALIDADA
             Validacao.objects.create(
-                item=item,
+                item_demanda=item,
                 usuario=request.user,
                 acao=TipoAcao.VALIDADO,
                 comentario=comentario
@@ -45,7 +45,7 @@ def validar_item(request, item_pk):
                 
             item.status = StatusDemanda.DEVOLVIDA
             Validacao.objects.create(
-                item=item,
+                item_demanda=item,
                 usuario=request.user,
                 acao=TipoAcao.DEVOLVIDO,
                 comentario=comentario
