@@ -12,6 +12,10 @@ dist/
 build/
 *.egg
 
+# Node.js
+node_modules/
+frontend/node_modules/
+
 # Virtual environment
 venv/
 .venv/
