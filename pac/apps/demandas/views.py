@@ -3,6 +3,7 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
+from .constants import pode_transicionar_status
 from .forms import DemandaForm, ItemDemandaForm
 from .models import Demanda, ItemDemanda, StatusDemanda
 
@@ -10,7 +11,7 @@ from .models import Demanda, ItemDemanda, StatusDemanda
 def demanda_list(request):
     qs = Demanda.objects.select_related("unidade", "usuario").prefetch_related("itens")
 
-    if not request.user.is_staff and getattr(request.user, "perfil", "usuario") == "usuario":
+    if not request.user.is_admin_user:
         qs = qs.filter(usuario=request.user)
 
     return render(request, "demandas/list.html", {"demandas": qs})
@@ -23,7 +24,6 @@ def demanda_create(request):
         if form.is_valid():
             demanda = form.save(commit=False)
             demanda.usuario = request.user
-            # Tenta pegar a unidade do usuário se disponível
             demanda.unidade = getattr(request.user, "unidade", None)
             
             if not demanda.unidade:
@@ -45,8 +45,7 @@ def demanda_detail(request, pk):
         Demanda.objects.select_related("unidade", "usuario").prefetch_related("itens"),
         pk=pk,
     )
-    # Verifica permissão
-    if not request.user.is_staff and demanda.usuario != request.user:
+    if not request.user.is_admin_user and demanda.usuario != request.user:
         messages.error(request, "Você não tem permissão para ver esta demanda.")
         return redirect("demandas:lista")
         
@@ -56,7 +55,7 @@ def demanda_detail(request, pk):
 def demanda_update(request, pk):
     demanda = get_object_or_404(Demanda, pk=pk)
 
-    if not request.user.is_staff and demanda.usuario != request.user:
+    if not request.user.is_admin_user and demanda.usuario != request.user:
         messages.error(request, "Você não tem permissão para editar esta demanda.")
         return redirect("demandas:lista")
 
@@ -77,7 +76,7 @@ def demanda_update(request, pk):
 def item_create(request, demanda_pk):
     demanda = get_object_or_404(Demanda, pk=demanda_pk)
     
-    if not request.user.is_staff and demanda.usuario != request.user:
+    if not request.user.is_admin_user and demanda.usuario != request.user:
         messages.error(request, "Você não tem permissão para adicionar itens nesta demanda.")
         return redirect("demandas:lista")
 
@@ -99,12 +98,12 @@ def item_create(request, demanda_pk):
 def item_update(request, pk):
     item = get_object_or_404(ItemDemanda, pk=pk)
 
-    if not request.user.is_staff and item.demanda.usuario != request.user:
+    if not request.user.is_admin_user and item.demanda.usuario != request.user:
         messages.error(request, "Você não tem permissão para editar este item.")
         return redirect("demandas:lista")
 
-    if item.demanda.status != StatusDemanda.RASCUNHO:
-        messages.error(request, "Itens só podem ser editados enquanto a demanda estiver em rascunho.")
+    if item.demanda.status != StatusDemanda.RASCUNHO and item.status != StatusDemanda.DEVOLVIDA:
+        messages.error(request, "Itens só podem ser editados enquanto a demanda estiver em rascunho ou devolvidos.")
         return redirect("demandas:detalhe", pk=item.demanda_id)
 
     form = ItemDemandaForm(request.POST or None, instance=item)
@@ -123,12 +122,16 @@ def item_update(request, pk):
 def demanda_enviar(request, pk):
     demanda = get_object_or_404(Demanda, pk=pk)
 
-    if not request.user.is_staff and demanda.usuario != request.user:
+    if not request.user.is_admin_user and demanda.usuario != request.user:
         messages.error(request, "Você não tem permissão para enviar esta demanda.")
         return redirect("demandas:lista")
 
     if not demanda.itens.exists():
         messages.error(request, "Adicione pelo menos um item antes de enviar.")
+        return redirect("demandas:detalhe", pk=pk)
+
+    if not pode_transicionar_status(demanda.status, StatusDemanda.AGUARDANDO_VALIDACAO):
+        messages.error(request, f"Transição inválida de {demanda.status} para {StatusDemanda.AGUARDANDO_VALIDACAO}.")
         return redirect("demandas:detalhe", pk=pk)
 
     demanda.status = StatusDemanda.AGUARDANDO_VALIDACAO

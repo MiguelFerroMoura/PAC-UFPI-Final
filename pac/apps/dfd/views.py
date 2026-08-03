@@ -2,12 +2,11 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import get_object_or_404, redirect, render
 from .models import DFD
+from apps.demandas.constants import pode_transicionar_status
 from apps.demandas.models import ItemDemanda, StatusDemanda
 
 @login_required
 def dfd_list(request):
-    # Somente admins e admin_master veem DFDs por padrão?
-    # No PAC UFPI, DFDs costumam ser públicos ou para acompanhamento
     qs = DFD.objects.select_related("grupo", "criado_por").prefetch_related("itens_demanda")
     return render(request, "dfd/list.html", {"dfds": qs})
 
@@ -22,17 +21,15 @@ def dfd_consolidar(request):
     """
     View para consolidar itens VALIDADOS em um DFD.
     """
-    if not request.user.is_staff:
+    if not request.user.is_admin_user:
         messages.error(request, "Acesso negado.")
         return redirect("home")
         
-    # Itens validados que ainda não estão em nenhum DFD
     itens_pendentes = ItemDemanda.objects.filter(
         status=StatusDemanda.VALIDADA
     ).exclude(dfds__isnull=False).select_related("demanda", "demanda__unidade")
     
     if request.method == "POST":
-        # Lógica de criação de DFD a partir dos itens selecionados
         item_ids = request.POST.getlist("itens")
         grupo_id = request.POST.get("grupo")
         numero_dfd = request.POST.get("numero")
@@ -40,14 +37,19 @@ def dfd_consolidar(request):
         if not item_ids or not grupo_id or not numero_dfd:
             messages.error(request, "Preencha todos os campos e selecione ao menos um item.")
         else:
+            itens_qs = ItemDemanda.objects.filter(id__in=item_ids)
+            for item in itens_qs:
+                if not pode_transicionar_status(item.status, StatusDemanda.CONSOLIDADA):
+                    messages.error(request, f"Item '{item.nome}' não pode ser consolidado.")
+                    return redirect("dfds:consolidar")
+
             dfd = DFD.objects.create(
                 numero=numero_dfd,
                 grupo_id=grupo_id,
                 criado_por=request.user
             )
             dfd.itens_demanda.set(item_ids)
-            # Atualiza status dos itens para consolidado
-            ItemDemanda.objects.filter(id__in=item_ids).update(status=StatusDemanda.CONSOLIDADA)
+            itens_qs.update(status=StatusDemanda.CONSOLIDADA)
             
             messages.success(request, f"DFD {dfd.numero} criado com sucesso.")
             return redirect("dfds:detalhe", pk=dfd.pk)

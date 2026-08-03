@@ -296,6 +296,58 @@ class DFDTests(APITestCase):
         )
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_fluxo_completo_ciclo_de_vida(self):
+        # 1. Usuário cria demanda em rascunho
+        self.client.force_login(self.user)
+        demanda_resp = self.client.post(
+            reverse("api:demanda-list"),
+            {"ano_referencia": 2027, "observacao": "Nova demanda de teste"},
+            format="json",
+        )
+        self.assertEqual(demanda_resp.status_code, status.HTTP_201_CREATED)
+        demanda_id = demanda_resp.data["id"]
+
+        # 2. Adiciona item à demanda
+        item_resp = self.client.post(
+            reverse("api:demanda-itens", kwargs={"pk": demanda_id}),
+            {
+                "tipo": "material", "nome": "Teclado", "descricao": "USB",
+                "unidade_medida": "un", "quantidade": 2, "valor_estimado": "100.00",
+                "data_prevista": "2027-03-01", "prioridade": "alta",
+                "justificativa_prioridade": "Essencial",
+                "justificativa_necessidade": "Substituição",
+                "indicacao_orcamentaria": "Recursos próprios",
+            },
+            format="json",
+        )
+        self.assertEqual(item_resp.status_code, status.HTTP_201_CREATED)
+        item_id = item_resp.data["id"]
+
+        # 3. Usuário envia a demanda
+        enviar_resp = self.client.post(reverse("api:demanda-enviar", kwargs={"pk": demanda_id}))
+        self.assertEqual(enviar_resp.status_code, status.HTTP_200_OK)
+
+        # 4. Admin valida o item
+        self.client.force_login(self.admin)
+        valida_resp = self.client.post(
+            reverse("api:validacao-decidir"),
+            {"item_demanda": item_id, "acao": "validado"},
+            format="json",
+        )
+        self.assertEqual(valida_resp.status_code, status.HTTP_201_CREATED)
+
+        # 5. Admin consolida em DFD
+        dfd_resp = self.client.post(
+            reverse("api:dfd-consolidar"),
+            {"numero": "DFD-2027-01", "grupo": self.grupo.pk, "itens": [item_id]},
+            format="json",
+        )
+        self.assertEqual(dfd_resp.status_code, status.HTTP_201_CREATED)
+
+        # 6. Verifica alteração para CONSOLIDADA no banco
+        item_obj = ItemDemanda.objects.get(pk=item_id)
+        self.assertEqual(item_obj.status, StatusDemanda.CONSOLIDADA)
+
 
 # =============================================================================
 # Catálogo e Dashboard
