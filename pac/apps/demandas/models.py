@@ -8,6 +8,7 @@ class StatusDemanda(models.TextChoices):
     DEVOLVIDA = "devolvida", "Devolvida"
     VALIDADA = "validada", "Validada"
     CONSOLIDADA = "consolidada", "Consolidada no DFD"
+    VINCULADA_DFD = "vinculada_dfd", "Vinculada ao DFD"
     CANCELADA = "cancelada", "Cancelada"
 
 

@@ -1,39 +1,31 @@
-from django.db import models
+from apps.demandas.models import StatusDemanda
 
 
-class StatusDemanda(models.TextChoices):
-    RASCUNHO = "RASCUNHO", "Rascunho"
-    AGUARDANDO_VALIDACAO = "AGUARDANDO_VALIDACAO", "Aguardando validação"
-    DEVOLVIDA = "DEVOLVIDA", "Devolvida"
-    VALIDADA = "VALIDADA", "Validada"
-    CONSOLIDADA = "CONSOLIDADA", "Consolidada"
-    VINCULADA_DFD = "VINCULADA_DFD", "Vinculada ao DFD"
-
-
-TRANSICOES_STATUS_DEMANDA = {
-    StatusDemanda.RASCUNHO: [
+TRANSICOES_STATUS = {
+    StatusDemanda.RASCUNHO: {
         StatusDemanda.AGUARDANDO_VALIDACAO,
-    ],
-    StatusDemanda.AGUARDANDO_VALIDACAO: [
+    },
+    StatusDemanda.AGUARDANDO_VALIDACAO: {
         StatusDemanda.DEVOLVIDA,
         StatusDemanda.VALIDADA,
-    ],
-    StatusDemanda.DEVOLVIDA: [
+    },
+    StatusDemanda.DEVOLVIDA: {
         StatusDemanda.RASCUNHO,
         StatusDemanda.AGUARDANDO_VALIDACAO,
-    ],
-    StatusDemanda.VALIDADA: [
+    },
+    StatusDemanda.VALIDADA: {
         StatusDemanda.CONSOLIDADA,
-    ],
-    StatusDemanda.CONSOLIDADA: [
+    },
+    StatusDemanda.CONSOLIDADA: {
         StatusDemanda.VINCULADA_DFD,
-    ],
-    StatusDemanda.VINCULADA_DFD: [],
+    },
+    StatusDemanda.VINCULADA_DFD: set(),
+    StatusDemanda.CANCELADA: set(),
 }
 
 
 def pode_transicionar_status(status_atual, novo_status):
     """
-    Verifica se uma demanda pode mudar de um status para outro.
+    Verifica genericamente se a transição entre status_atual e novo_status é válida.
     """
-    return novo_status in TRANSICOES_STATUS_DEMANDA.get(status_atual, [])
+    return novo_status in TRANSICOES_STATUS.get(status_atual, set())
