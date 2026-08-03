@@ -1,229 +1,86 @@
-# Sistema de Gestão do Plano Anual de Contratações (PAC) - UFPI
+# Sistema de Gestão do PAC UFPI
 
-Sistema web para gerenciamento do Plano Anual de Contratações (PAC) da Universidade Federal do Piauí (UFPI).
+Plataforma web para cadastrar, validar, consolidar e acompanhar as demandas do Plano Anual de Contratações da UFPI. O projeto usa Django e Django REST Framework no back-end, React com Vite no front-end, Bootstrap para interface, SQLite para persistência local e Docker para execução em produção.
 
----
+## Como instalar e rodar o projeto
 
-# Sobre o projeto
+Pré-requisitos: Python 3.11+, Node.js 20+, npm e Git.
 
-O sistema PAC UFPI tem como objetivo centralizar o processo de cadastro, validação, consolidação e acompanhamento das demandas institucionais do Plano Anual de Contratações.
-
-A aplicação é composta por duas partes desacopladas:
-
-- **Back-end** — API REST em **Django + Django REST Framework**, responsável pelas regras de negócio, persistência e autenticação.
-- **Front-end** — **SPA (Single Page Application) em React**, que consome a API REST.
-
----
-
-# Objetivo
-
-O sistema permite:
-
-- Cadastro de demandas por unidades;
-- Gerenciamento de itens do catálogo;
-- Validação e devolução de itens por administradores;
-- Consolidação de demandas em DFD;
-- Controle de status e fluxo das solicitações;
-- Rastreabilidade e auditoria;
-- Acompanhamento gerencial do PAC.
-
----
-
-# Stack
-
-## Back-end
-
-- Django 5.1
-- Django REST Framework (API REST)
-- Django ORM
-- Django Admin
-- django-cors-headers (CORS para o front-end)
-
-## Front-end
-
-- React 18 (SPA)
-- Vite (build e servidor de desenvolvimento)
-- React Router (roteamento)
-- Bootstrap 5 (estilos)
-- Vitest + React Testing Library (testes)
-
-## Banco de dados
-
-- SQLite (local e produção)
-
-## Infraestrutura
-
-- Gunicorn (servidor WSGI)
-- WhiteNoise (arquivos estáticos)
-- Docker (imagem de produção multi-stage: build do React + app Django)
-
----
-
-# Arquitetura
-
-- **Back-end desacoplado** expondo uma **API REST** sob o prefixo `/api/`.
-- **Front-end SPA** independente, consumindo a API via `fetch` com autenticação por sessão (cookies) + CSRF.
-- **Monolito modular** no back-end: cada domínio é um app Django isolado.
-- **Autenticação por sessão** com modelo de usuário customizado.
-
-```txt
-┌─────────────────────────┐        HTTP/JSON        ┌──────────────────────────┐
-│  React SPA (Vite)       │  ───────────────────▶   │  Django REST Framework   │
-│  Bootstrap 5            │  ◀───────────────────   │  /api/ (sessão + CSRF)    │
-│  porta 5173 (dev)       │                         │  porta 8000               │
-└─────────────────────────┘                         └──────────────────────────┘
-                                                                 │
-                                                                 ▼
-                                                          ┌──────────────┐
-                                                          │  SQLite      │
-                                                          └──────────────┘
-```
-
-## Módulos principais (apps Django)
-
-| App Django | Responsabilidade |
-|---|---|
-| api | Camada de API REST (serializers, viewsets, rotas) |
-| usuarios | Usuários, autenticação e permissões |
-| unidades | Cadastro das unidades |
-| grupos_contratacao | Governança por grupos de contratação |
-| catalogo | Itens e serviços disponíveis |
-| demandas | Fluxo principal das demandas |
-| validacoes | Validação e devolução de itens |
-| dfd | Consolidação e vínculo de DFD |
-| dashboard | Indicadores gerenciais |
-| auditoria | Histórico e rastreabilidade |
-
----
-
-# Fluxo básico do sistema
-
-```txt
-Usuário cria demanda
-        ↓
-Usuário adiciona itens
-        ↓
-Usuário envia demanda
-        ↓
-ADMIN valida ou devolve
-        ↓
-Itens validados são consolidados
-        ↓
-DFD é vinculado
-        ↓
-Dashboard acompanha execução
-```
-
----
-
-# Perfis do sistema
-
-| Perfil | Responsabilidade |
-|---|---|
-| USUÁRIO | Cadastro e acompanhamento das demandas |
-| ADMIN | Validação, devolução e consolidação |
-| ADMIN MASTER | Governança geral do sistema e do PAC |
-
----
-
-# Como rodar localmente
-
-## Pré-requisitos
-
-- Python 3.11+
-- Node.js 20+ e npm
-- Git
-
----
-
-## Clonar o projeto
+1. Clone o repositório e entre na pasta do projeto:
 
 ```bash
 git clone <url-do-repositorio>
 cd PAC-UFPI-Final
 ```
 
----
-
-## Back-end (Django + API REST)
+2. Crie e ative o ambiente virtual:
 
 ```bash
-# 1. Criar e ativar o ambiente virtual
 python -m venv venv
-# Linux/macOS
-source venv/bin/activate
-# Windows
 venv\Scripts\activate
-
-# 2. Instalar dependências
-pip install -r requirements.txt
-
-# 3. Copiar variáveis de ambiente
-cp .env.example .env      # (no Windows: copy .env.example .env)
-
-# 4. Aplicar migrações (SQLite — sem configuração extra)
-cd pac
-python manage.py migrate
-
-# 5. Criar superusuário
-python manage.py createsuperuser
-
-# 6. Rodar o servidor da API
-python manage.py runserver   # API em http://localhost:8000/api/
 ```
 
----
+3. Instale as dependências do back-end:
 
-## Front-end (React + Vite)
+```bash
+pip install -r requirements.txt
+```
 
-Em outro terminal:
+4. Copie o arquivo de ambiente e ajuste os valores, se necessário:
+
+```bash
+copy .env.example .env
+```
+
+5. Aplique as migrações e suba a API:
+
+```bash
+cd pac
+python manage.py migrate
+python manage.py createsuperuser
+python manage.py runserver
+```
+
+6. Em outro terminal, suba o front-end:
 
 ```bash
 cd frontend
 npm install
-npm run dev        # SPA em http://localhost:5173
+npm run dev
 ```
 
-Por padrão, o front-end consome a API em `http://localhost:8000/api`. Para
-apontar para outra URL, defina `VITE_API_URL` (ex.: em `frontend/.env`).
+Por padrão, o front-end roda em `http://localhost:5173` e a API em `http://localhost:8000`.
 
----
-
-## Testes
+7. Se quiser validar tudo, rode os testes:
 
 ```bash
-# Back-end (API REST)
 cd pac
 python manage.py test
 
-# Front-end (React)
-cd frontend
+cd ../frontend
 npm test
 ```
 
----
+## Como usar o projeto
 
-# Deploy
+Depois de iniciar os dois servidores, acesse o front-end, faça login e use os módulos principais para cadastrar demandas, revisar itens do catálogo, validar ou devolver solicitações e acompanhar os indicadores no dashboard. Se quiser, inclua aqui capturas de tela dos fluxos mais importantes.
 
-A imagem Docker de produção (`Dockerfile`) é multi-stage:
+## Como contribuir
 
-1. **Estágio Node** — instala dependências e gera o build do React (`frontend/dist`).
-2. **Estágio Python** — instala o Django, copia o build do React e serve tudo
-   com **Gunicorn + WhiteNoise**, usando **SQLite** como banco.
+1. Faça um fork do projeto.
+2. Crie uma branch para sua alteração.
+3. Implemente a mudança e valide localmente.
+4. Abra uma pull request explicando o que foi alterado.
 
-```bash
-docker build -t pac-ufpi .
-docker run -p 8000:8000 -e SECRET_KEY=troque-isto pac-ufpi
-```
+Se a contribuição for grande, vale abrir uma issue antes para alinhar o escopo.
 
----
+## Estrutura de pastas
 
-# Observação institucional
-
-A infraestrutura definitiva deverá ser validada com a STI/UFPI conforme políticas institucionais de segurança, disponibilidade e gestão de dados.
-
----
-
-# Equipe
-
-Projeto desenvolvido para apoio ao gerenciamento do Plano Anual de Contratações da UFPI.
+- `pac/`: back-end Django, apps, rotas e configuração principal.
+- `frontend/`: SPA em React com testes e configuração do Vite.
+- `docs/`: documentação do projeto e dos fluxos.
+- `templates/`: templates HTML do Django.
+- `static/`: arquivos estáticos servidos pela aplicação.
+- `Dockerfile`: imagem de produção para back-end e front-end.
+- `requirements.txt`: dependências Python do projeto.
+- `ruff.toml`: configuração de lint do Python.
