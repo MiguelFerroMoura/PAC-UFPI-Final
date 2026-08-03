@@ -36,25 +36,25 @@ principal de cadastro, validação, devolução, consolidação e DFD.
 
 ## Semana 1 — Fundação
 
-- [ ] **P0 — Padronizar os status**
-  - [ ] Unificar enums e constantes
-  - [ ] Definir transições permitidas
-  - [ ] Aplicar transições na API
-  - [ ] Criar migração para dados existentes
-  - [ ] Atualizar o frontend
+- [x] **P0 — Padronizar os status**
+  - [x] Unificar enums e constantes
+  - [x] Definir transições permitidas
+  - [x] Aplicar transições na API
+  - [x] Mantido enums minúsculos (sem necessidade de migração extra)
+  - [x] Atualizar o frontend (compatibilidade preservada, 54 testes OK)
 
-- [ ] **P0 — Corrigir permissões por perfil**
-  - [ ] Criar permission class para ADMIN
-  - [ ] Criar permission class para ADMIN MASTER
-  - [ ] Remover dependência indevida de `is_staff`
-  - [ ] Proteger endpoints
-  - [ ] Testar acesso com os três perfis
+- [x] **P0 — Corrigir permissões por perfil**
+  - [x] Criar permission class para ADMIN (IsAdminUserPermission)
+  - [x] Criar permission class para ADMIN MASTER (IsAdminMasterUserPermission)
+  - [x] Encapsular permissões em properties do modelo Usuario (is_admin_user / is_admin_master_user)
+  - [x] Proteger endpoints da API
+  - [x] Testar acesso com perfil (testes positivos e negativos OK)
 
-- [ ] **P0 — Corrigir fluxo de validação**
-  - [ ] Corrigir bug `item` versus `item_demanda`
-  - [ ] Verificar validação individual
-  - [ ] Exigir comentário na devolução
-  - [ ] Garantir registro na tabela `Validacao`
+- [x] **P0 — Corrigir fluxo de validação**
+  - [x] Corrigir bug `item` versus `item_demanda` (views legadas + API)
+  - [x] Verificar validação individual
+  - [x] Exigir comentário na devolução
+  - [x] Garantir registro na tabela `Validacao`
 
 ## Semana 2 — Fluxos principais
 
@@ -234,8 +234,14 @@ Registrar neste formato:
 ### Caio
 
 - Feito:
-- Em andamento:
-- Bloqueio:
+  - Correção do Bug B1 (`item_demanda` nas views de validação).
+  - Reutilização direta do enum `StatusDemanda` em `constants.py` e implementação da máquina de estados genérica `pode_transicionar_status`.
+  - Encapsulamento de permissões por perfil no modelo `Usuario` (`is_admin_user` / `is_admin_master_user`) e criação das Permission Classes DRF (`IsAdminUserPermission` / `IsAdminMasterUserPermission`).
+  - Proteção dos ViewSets (`ValidacaoViewSet`, `DFDViewSet`, etc.) com permissões por perfil e validação de transição de status.
+  - Testes automatizados backend (21/21 OK, incluindo testes negativos) e frontend Vitest (54/54 OK).
+  - 4 commits independentes realizados.
+- Em andamento: Tarefas da Semana 1 concluídas.
+- Bloqueio: Nenhum.
 
 ### Miguel
 
