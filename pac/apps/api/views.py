@@ -333,28 +333,51 @@ class ItemDemandaViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def reenviar(self, request, pk=None):
         with transaction.atomic():
-            item = ItemDemanda.objects.select_for_update().get(pk=pk)
+            item = ItemDemanda.objects.select_for_update().select_related("demanda").filter(pk=pk).first()
+            if item is None:
+                return Response({"detail": "Item não encontrado."}, status=status.HTTP_404_NOT_FOUND)
+
+            demanda = Demanda.objects.select_for_update().get(pk=item.demanda_id)
+
             if not self._pode_editar(item):
                 return Response(
                     {"detail": "Você não tem permissão para reenviar este item."},
                     status=status.HTTP_403_FORBIDDEN,
                 )
-            if item.demanda.status in [StatusDemanda.CONCLUIDA, StatusDemanda.CANCELADA]:
+            if demanda.status in [StatusDemanda.CONCLUIDA, StatusDemanda.CANCELADA]:
                 return Response(
                     {"detail": "Não é permitido alterar solicitações encerradas ou canceladas."},
                     status=status.HTTP_409_CONFLICT,
                 )
             if not pode_transicionar_item(item.status, StatusItemDemanda.AGUARDANDO_VALIDACAO):
                 return Response(
-                    {"detail": f"Somente itens devolvidos podem ser reenviados para validação."},
+                    {"detail": "Somente itens devolvidos podem ser reenviados para validação."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
+            from apps.demandas.services import validar_item_para_envio
+            from django.core.exceptions import ValidationError
+            try:
+                validar_item_para_envio(item)
+            except ValidationError as ve:
+                msg = ve.message if hasattr(ve, "message") else str(ve)
+                return Response({"detail": msg}, status=status.HTTP_400_BAD_REQUEST)
+
             item.status = StatusItemDemanda.AGUARDANDO_VALIDACAO
             item.save(update_fields=["status", "atualizado_em"])
-            demanda_locked = Demanda.objects.select_for_update().get(pk=item.demanda_id)
-            sincronizar_status_macro_demanda(demanda_locked)
-            return Response(ItemDemandaSerializer(item).data)
+            sincronizar_status_macro_demanda(demanda)
+            return Response(
+                {
+                    "detail": "Item reenviado para validação com sucesso.",
+                    "item": ItemDemandaSerializer(item, context={"request": request}).data,
+                    "demanda": {
+                        "id": demanda.id,
+                        "status": demanda.status,
+                        "status_display": demanda.get_status_display(),
+                    },
+                },
+                status=status.HTTP_200_OK,
+            )
 
 
 # =============================================================================

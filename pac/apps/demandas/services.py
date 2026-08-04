@@ -43,3 +43,21 @@ def sincronizar_status_macro_demanda(demanda: Demanda) -> str:
         demanda.save(update_fields=["status", "atualizado_em"])
 
     return demanda.status
+
+
+def validar_item_para_envio(item) -> None:
+    """
+    Valida as regras funcionais de um item antes do envio inicial ou reenvio.
+    """
+    from django.core.exceptions import ValidationError
+
+    if not item.nome or not item.nome.strip():
+        raise ValidationError("O nome do item é obrigatório.")
+    if not item.quantidade or item.quantidade <= 0:
+        raise ValidationError("A quantidade deve ser maior que zero.")
+    if not item.valor_estimado or item.valor_estimado <= 0:
+        raise ValidationError("O valor estimado unitário deve ser maior que zero.")
+    if not item.data_prevista:
+        raise ValidationError("A data prevista é obrigatória.")
+    if not item.justificativa_necessidade or not item.justificativa_necessidade.strip():
+        raise ValidationError("A justificativa da necessidade é obrigatória.")
