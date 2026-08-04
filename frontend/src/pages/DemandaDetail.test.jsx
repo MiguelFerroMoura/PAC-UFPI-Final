@@ -207,5 +207,31 @@ describe("DemandaDetail", () => {
       await screen.findByText(/não é permitido alterar solicitações encerradas ou canceladas/i)
     ).toBeInTheDocument();
   });
+
+  it("desabilita botão de reenvio durante a requisição pendente", async () => {
+    let resolveReenviar;
+    const reenviarPromise = new Promise((resolve) => {
+      resolveReenviar = resolve;
+    });
+    api.getDemanda.mockResolvedValue(demandaDevolvida);
+    api.reenviarItem.mockReturnValue(reenviarPromise);
+
+    renderDetail();
+    expect(await screen.findByText("Demanda #7")).toBeInTheDocument();
+
+    const btnReenviar = screen.getByRole("button", { name: /reenviar/i });
+    await userEvent.click(btnReenviar);
+
+    expect(btnReenviar).toBeDisabled();
+    expect(btnReenviar).toHaveTextContent("Reenviando...");
+    expect(api.reenviarItem).toHaveBeenCalledTimes(1);
+
+    await userEvent.click(btnReenviar);
+    expect(api.reenviarItem).toHaveBeenCalledTimes(1);
+
+    await waitFor(() => {
+      resolveReenviar({ detail: "Sucesso" });
+    });
+  });
 });
 

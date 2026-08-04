@@ -654,6 +654,47 @@ class ServerSideIntegrationTests(APITestCase):
         self.demanda.refresh_from_db()
         self.assertEqual(self.demanda.status, StatusDemanda.AGUARDANDO_VALIDACAO)
 
+    def test_server_side_item_reenviar_sem_csrf_rejeita(self):
+        from django.test import Client
+        from apps.validacoes.models import Validacao, TipoAcao
+        csrf_client = Client(enforce_csrf_checks=True)
+        item = ItemDemanda.objects.create(
+            demanda=self.demanda, tipo="material", nome="Mouse CSRF", quantidade=1,
+            valor_estimado=Decimal("50"), valor_total=Decimal("50"),
+            data_prevista=date(2027, 1, 1), status=StatusItemDemanda.DEVOLVIDA,
+            justificativa_necessidade="Necessário",
+        )
+        Validacao.objects.create(item_demanda=item, usuario=self.admin, acao=TipoAcao.DEVOLVIDO, comentario="Devolvido")
+        csrf_client.force_login(self.user)
+
+        resp = csrf_client.post(reverse("demandas:item_reenviar", kwargs={"pk": item.pk}))
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_server_side_item_reenviar_com_csrf_sucesso(self):
+        from django.test import Client
+        from apps.validacoes.models import Validacao, TipoAcao
+        csrf_client = Client(enforce_csrf_checks=True)
+        item = ItemDemanda.objects.create(
+            demanda=self.demanda, tipo="material", nome="Mouse CSRF Valid", quantidade=1,
+            valor_estimado=Decimal("50"), valor_total=Decimal("50"),
+            data_prevista=date(2027, 1, 1), status=StatusItemDemanda.DEVOLVIDA,
+            justificativa_necessidade="Necessário",
+        )
+        Validacao.objects.create(item_demanda=item, usuario=self.admin, acao=TipoAcao.DEVOLVIDO, comentario="Devolvido")
+        csrf_client.force_login(self.user)
+
+        get_resp = csrf_client.get(reverse("demandas:detalhe", kwargs={"pk": self.demanda.pk}))
+        self.assertEqual(get_resp.status_code, status.HTTP_200_OK)
+        csrf_token = csrf_client.cookies["csrftoken"].value
+
+        resp = csrf_client.post(
+            reverse("demandas:item_reenviar", kwargs={"pk": item.pk}),
+            {"csrfmiddlewaretoken": csrf_token},
+        )
+        self.assertEqual(resp.status_code, status.HTTP_302_FOUND)
+        item.refresh_from_db()
+        self.assertEqual(item.status, StatusItemDemanda.AGUARDANDO_VALIDACAO)
+
 
 class ItemDevolvidoCorrecaoTests(APITestCase):
     def setUp(self):
@@ -697,6 +738,8 @@ class ItemDevolvidoCorrecaoTests(APITestCase):
         self.assertEqual(Validacao.objects.filter(item_demanda=self.item).count(), 2)
 
     def test_editar_item_devolvido_salva_observacoes_e_mantem_status(self):
+        from apps.validacoes.models import Validacao
+        validacoes_antes = Validacao.objects.filter(item_demanda=self.item).count()
         self.client.force_login(self.user)
         resp = self.client.put(
             reverse("api:item-detail", kwargs={"pk": self.item.pk}),
@@ -714,8 +757,12 @@ class ItemDevolvidoCorrecaoTests(APITestCase):
         self.assertEqual(self.item.nome, "Impressora Laser")
         self.assertEqual(self.item.observacoes, "Ajustada marca e modelo conforme solicitado.")
         self.assertEqual(self.item.status, StatusItemDemanda.DEVOLVIDA)
+        # Comprova diretamente que edição NÃO cria nem altera instâncias de Validacao
+        self.assertEqual(Validacao.objects.filter(item_demanda=self.item).count(), validacoes_antes)
 
     def test_observacao_do_solicitante_nao_substitui_justificativa_admin(self):
+        from apps.validacoes.models import Validacao
+        validacoes_antes = Validacao.objects.filter(item_demanda=self.item).count()
         self.client.force_login(self.user)
         self.client.patch(
             reverse("api:item-detail", kwargs={"pk": self.item.pk}),
@@ -724,8 +771,11 @@ class ItemDevolvidoCorrecaoTests(APITestCase):
         )
         self.val1.refresh_from_db()
         self.assertEqual(self.val1.comentario, "Primeira devolução: ajustar marca.")
+        self.assertEqual(Validacao.objects.filter(item_demanda=self.item).count(), validacoes_antes)
 
     def test_reenviar_item_devolvido_sucesso(self):
+        from apps.validacoes.models import Validacao
+        validacoes_antes = Validacao.objects.filter(item_demanda=self.item).count()
         self.client.force_login(self.user)
         resp = self.client.post(reverse("api:item-reenviar", kwargs={"pk": self.item.pk}))
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
@@ -734,6 +784,42 @@ class ItemDevolvidoCorrecaoTests(APITestCase):
         self.assertEqual(self.item.status, StatusItemDemanda.AGUARDANDO_VALIDACAO)
         self.demanda.refresh_from_db()
         self.assertEqual(self.demanda.status, StatusDemanda.AGUARDANDO_VALIDACAO)
+        # Comprova diretamente que o reenvio NÃO cria nenhuma validação artificial
+        self.assertEqual(Validacao.objects.filter(item_demanda=self.item).count(), validacoes_antes)
+
+    def test_demanda_detail_query_count_does_not_grow_per_item(self):
+        from apps.validacoes.models import Validacao, TipoAcao
+        from django.test.utils import CaptureQueriesContext
+        from django.db import connection
+
+        d1 = Demanda.objects.create(unidade=self.unidade, usuario=self.user, ano_referencia=2027)
+        i1 = ItemDemanda.objects.create(
+            demanda=d1, tipo="material", nome="Item 1", quantidade=1,
+            valor_estimado=Decimal("100"), valor_total=Decimal("100"),
+            data_prevista=date(2027, 1, 1), status=StatusItemDemanda.DEVOLVIDA,
+            justificativa_necessidade="N",
+        )
+        Validacao.objects.create(item_demanda=i1, usuario=self.admin, acao=TipoAcao.DEVOLVIDO, comentario="Dev1")
+
+        d2 = Demanda.objects.create(unidade=self.unidade, usuario=self.user, ano_referencia=2027)
+        for idx in range(5):
+            it = ItemDemanda.objects.create(
+                demanda=d2, tipo="material", nome=f"Item {idx}", quantidade=1,
+                valor_estimado=Decimal("100"), valor_total=Decimal("100"),
+                data_prevista=date(2027, 1, 1), status=StatusItemDemanda.DEVOLVIDA,
+                justificativa_necessidade="N",
+            )
+            Validacao.objects.create(item_demanda=it, usuario=self.admin, acao=TipoAcao.DEVOLVIDO, comentario=f"Dev {idx}")
+
+        self.client.force_login(self.user)
+
+        with CaptureQueriesContext(connection) as ctx1:
+            self.client.get(reverse("api:demanda-detail", kwargs={"pk": d1.pk}))
+
+        with CaptureQueriesContext(connection) as ctx2:
+            self.client.get(reverse("api:demanda-detail", kwargs={"pk": d2.pk}))
+
+        self.assertEqual(len(ctx1), len(ctx2))
 
     def test_reenviar_item_nao_devolvido_rejeita(self):
         self.item.status = StatusItemDemanda.AGUARDANDO_VALIDACAO
