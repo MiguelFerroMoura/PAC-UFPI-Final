@@ -306,6 +306,7 @@ class DFDTests(APITestCase):
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_consolidacao_reverte_todas_as_escritas_em_falha_intermediaria(self):
+        dfd_count_inicial = DFD.objects.count()
         self.client.force_login(self.admin)
         with mock.patch("apps.api.views.sincronizar_status_macro_demanda", side_effect=RuntimeError("Falha simulada")):
             with self.assertRaises(RuntimeError):
@@ -314,7 +315,8 @@ class DFDTests(APITestCase):
                     {"numero": "DFD-FAIL", "grupo": self.grupo.pk, "itens": [self.item.pk]},
                     format="json",
                 )
-        self.assertEqual(DFD.objects.filter(numero="DFD-FAIL").count(), 0)
+        self.assertFalse(DFD.objects.filter(numero="DFD-FAIL").exists())
+        self.assertEqual(DFD.objects.count(), dfd_count_inicial)
         self.item.refresh_from_db()
         self.assertEqual(self.item.status, StatusItemDemanda.VALIDADA)
         self.demanda.refresh_from_db()
@@ -360,7 +362,8 @@ class DFDTests(APITestCase):
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(DFD.objects.filter(numero="DFD-BAD-ID").count(), 0)
 
-    def test_consolidar_rejeita_ids_duplicados(self):
+    def test_consolidar_desduplica_ids_repetidos(self):
+        # A desduplicação automática da lista de itens na consolidação é intencional para o MVP.
         self.client.force_login(self.admin)
         resp = self.client.post(
             reverse("api:dfd-consolidar"),
