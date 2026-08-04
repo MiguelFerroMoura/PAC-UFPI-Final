@@ -17,6 +17,7 @@ from rest_framework.test import APITestCase
 from apps.catalogo.models import ItemCatalogo
 from apps.demandas.models import Demanda, ItemDemanda, StatusDemanda, StatusItemDemanda
 from apps.demandas.services import sincronizar_status_macro_demanda
+from apps.dfd.models import DFD
 from apps.grupos_contratacao.models import GrupoContratacao
 from apps.unidades.models import Unidade
 
