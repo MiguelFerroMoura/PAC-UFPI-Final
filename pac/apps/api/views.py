@@ -231,6 +231,18 @@ class DemandaViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
+            from apps.demandas.services import validar_item_para_envio
+            from django.core.exceptions import ValidationError
+            for item in demanda.itens.all():
+                try:
+                    validar_item_para_envio(item)
+                except ValidationError as ve:
+                    msg = ve.message if hasattr(ve, "message") else str(ve)
+                    return Response(
+                        {"detail": f"Item '{item.nome}': {msg}"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
             demanda.enviada_em = timezone.now()
             demanda.save(update_fields=["enviada_em", "atualizado_em"])
             demanda.itens.update(status=StatusItemDemanda.AGUARDANDO_VALIDACAO)

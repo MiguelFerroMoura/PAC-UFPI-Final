@@ -144,7 +144,7 @@ class DemandaTests(APITestCase):
         ItemDemanda.objects.create(
             demanda=demanda, tipo="material", nome="Item 1", quantidade=1,
             valor_estimado=Decimal("100"), valor_total=Decimal("100"),
-            data_prevista=date(2027, 1, 1),
+            data_prevista=date(2027, 1, 1), justificativa_necessidade="Uso necessário",
         )
         resp = self.client.post(
             reverse("api:demanda-enviar", kwargs={"pk": demanda.pk})
@@ -617,6 +617,7 @@ class ServerSideIntegrationTests(APITestCase):
             demanda=self.demanda, tipo="material", nome="Monitor", quantidade=1,
             valor_estimado=Decimal("500"), valor_total=Decimal("500"),
             data_prevista=date(2027, 1, 1), status=StatusItemDemanda.RASCUNHO,
+            justificativa_necessidade="Uso necessário",
         )
         self.client.force_login(self.user)
         resp = self.client.post(reverse("demandas:enviar", kwargs={"pk": self.demanda.pk}))
@@ -769,6 +770,66 @@ class ItemDevolvidoCorrecaoTests(APITestCase):
             {"nome": "Admin Edit"}, format="json",
         )
         self.assertEqual(edit_resp.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_segundo_reenvio_do_mesmo_item_eh_rejeitado(self):
+        from apps.validacoes.models import Validacao
+        self.client.force_login(self.user)
+        # Primeiro reenvio: sucesso
+        resp1 = self.client.post(reverse("api:item-reenviar", kwargs={"pk": self.item.pk}))
+        self.assertEqual(resp1.status_code, status.HTTP_200_OK)
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.status, StatusItemDemanda.AGUARDANDO_VALIDACAO)
+
+        val_count_before = Validacao.objects.filter(item_demanda=self.item).count()
+
+        # Segundo reenvio: rejeitado por transição inválida
+        resp2 = self.client.post(reverse("api:item-reenviar", kwargs={"pk": self.item.pk}))
+        self.assertEqual(resp2.status_code, status.HTTP_400_BAD_REQUEST)
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.status, StatusItemDemanda.AGUARDANDO_VALIDACAO)
+        self.demanda.refresh_from_db()
+        self.assertEqual(self.demanda.status, StatusDemanda.AGUARDANDO_VALIDACAO)
+        self.assertEqual(Validacao.objects.filter(item_demanda=self.item).count(), val_count_before)
+
+    def test_get_item_proprietario_acessa(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("api:item-detail", kwargs={"pk": self.item.pk}))
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["id"], self.item.pk)
+        self.assertEqual(resp.data["demanda"], self.demanda.pk)
+
+    def test_get_item_outro_usuario_bloqueado(self):
+        self.client.force_login(self.outro_user)
+        resp = self.client.get(reverse("api:item-detail", kwargs={"pk": self.item.pk}))
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_get_item_inexistente_retorna_404(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("api:item-detail", kwargs={"pk": 999999}))
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_prefetch_multiplos_itens_devolvidos(self):
+        from apps.validacoes.models import Validacao, TipoAcao
+        item2 = ItemDemanda.objects.create(
+            demanda=self.demanda, tipo="material", nome="Monitor 27", quantidade=2,
+            valor_estimado=Decimal("1200"), valor_total=Decimal("2400"),
+            data_prevista=date(2027, 5, 1), prioridade="alta",
+            justificativa_prioridade="a", justificativa_necessidade="b",
+            indicacao_orcamentaria="c", status=StatusItemDemanda.DEVOLVIDA,
+        )
+        Validacao.objects.create(
+            item_demanda=item2, usuario=self.admin, acao=TipoAcao.DEVOLVIDO, comentario="Devolução Monitor: ajustar resolução."
+        )
+
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("api:demanda-detail", kwargs={"pk": self.demanda.pk}))
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        itens = resp.data["itens"]
+        self.assertEqual(len(itens), 2)
+        i1 = next(i for i in itens if i["id"] == self.item.pk)
+        i2 = next(i for i in itens if i["id"] == item2.pk)
+        self.assertEqual(i1["justificativa_devolucao"], "Primeira devolução: ajustar marca.")
+        self.assertEqual(i2["justificativa_devolucao"], "Devolução Monitor: ajustar resolução.")
 
 
 # =============================================================================

@@ -202,6 +202,14 @@ def demanda_enviar(request, pk):
             messages.error(request, f"Transição inválida de {demanda.status} para {StatusDemanda.AGUARDANDO_VALIDACAO}.")
             return redirect("demandas:detalhe", pk=pk)
 
+        for item in demanda.itens.all():
+            try:
+                validar_item_para_envio(item)
+            except ValidationError as ve:
+                msg = ve.message if hasattr(ve, "message") else str(ve)
+                messages.error(request, f"Erro no item '{item.nome}': {msg}")
+                return redirect("demandas:detalhe", pk=pk)
+
         demanda.enviada_em = timezone.now()
         demanda.save(update_fields=["enviada_em", "atualizado_em"])
         demanda.itens.update(status=StatusItemDemanda.AGUARDANDO_VALIDACAO)
