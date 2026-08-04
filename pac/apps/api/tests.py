@@ -476,6 +476,69 @@ class SincronizacaoMacroTests(APITestCase):
         self.demanda.refresh_from_db()
         self.assertEqual(self.demanda.status, StatusDemanda.RASCUNHO)
 
+    def test_patch_direto_nao_altera_status_do_item(self):
+        item = ItemDemanda.objects.create(
+            demanda=self.demanda, tipo="material", nome="Item A", quantidade=1,
+            valor_estimado=Decimal("10"), valor_total=Decimal("10"),
+            data_prevista=date(2027, 1, 1), status=StatusItemDemanda.RASCUNHO,
+        )
+        self.client.force_login(self.user)
+        resp = self.client.patch(
+            reverse("api:item-detail", kwargs={"pk": item.pk}),
+            {"status": StatusItemDemanda.VALIDADA},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        item.refresh_from_db()
+        self.assertEqual(item.status, StatusItemDemanda.RASCUNHO)
+
+    def test_alterar_demanda_concluida_rejeita(self):
+        self.demanda.status = StatusDemanda.CONCLUIDA
+        self.demanda.save()
+        self.client.force_login(self.user)
+        resp = self.client.post(
+            reverse("api:demanda-itens", kwargs={"pk": self.demanda.pk}),
+            dados_item(),
+        )
+        self.assertEqual(resp.status_code, status.HTTP_409_CONFLICT)
+
+
+# =============================================================================
+# Server-Side Integration
+# =============================================================================
+
+class ServerSideIntegrationTests(APITestCase):
+    def setUp(self):
+        self.unidade = criar_unidade()
+        self.user = criar_usuario(unidade=self.unidade)
+        self.admin = criar_usuario(username="admin", is_staff=True, perfil="admin")
+        self.demanda = Demanda.objects.create(
+            unidade=self.unidade, usuario=self.user, ano_referencia=2027
+        )
+
+    def test_server_side_envio_e_validacao(self):
+        item = ItemDemanda.objects.create(
+            demanda=self.demanda, tipo="material", nome="Monitor", quantidade=1,
+            valor_estimado=Decimal("500"), valor_total=Decimal("500"),
+            data_prevista=date(2027, 1, 1), status=StatusItemDemanda.RASCUNHO,
+        )
+        self.client.force_login(self.user)
+        resp = self.client.post(reverse("demandas:enviar", kwargs={"pk": self.demanda.pk}))
+        self.assertEqual(resp.status_code, status.HTTP_302_FOUND)
+        self.demanda.refresh_from_db()
+        self.assertEqual(self.demanda.status, StatusDemanda.AGUARDANDO_VALIDACAO)
+
+        self.client.force_login(self.admin)
+        val_resp = self.client.post(
+            reverse("validacoes:validar_item", kwargs={"item_pk": item.pk}),
+            {"acao": "aprovar"},
+        )
+        self.assertEqual(val_resp.status_code, status.HTTP_302_FOUND)
+        item.refresh_from_db()
+        self.assertEqual(item.status, StatusItemDemanda.VALIDADA)
+        self.demanda.refresh_from_db()
+        self.assertEqual(self.demanda.status, StatusDemanda.EM_ANDAMENTO)
+
 
 # =============================================================================
 # Catálogo e Dashboard
