@@ -81,16 +81,33 @@
                             <td class="ps-3">
                                 <div class="fw-bold">{{ item.nome }}</div>
                                 <div class="small text-muted">{{ item.get_tipo_display }}</div>
+                                {% if item.status == 'devolvida' and item.justificativa_devolucao %}
+                                <div class="alert alert-warning py-1 px-2 mt-1 mb-0 small">
+                                    <strong><i class="bi bi-exclamation-triangle me-1"></i>Parecer da Devolução:</strong> {{ item.justificativa_devolucao }}
+                                </div>
+                                {% endif %}
                             </td>
                             <td>{{ item.quantidade }} {{ item.unidade_medida }}</td>
                             <td>R$ {{ item.valor_total }}</td>
                             <td>
-                                <span class="badge {% if item.status == 'validada' %}bg-success{% elif item.status == 'devolvida' %}bg-danger{% else %}bg-secondary{% endif %}">
+                                <span class="badge {% if item.status == 'validada' %}bg-success{% elif item.status == 'devolvida' %}bg-warning text-dark{% else %}bg-secondary{% endif %}">
                                     {{ item.get_status_display }}
                                 </span>
                             </td>
                             <td class="text-end pe-3">
-                                {% if demanda.status == 'rascunho' or demanda.status == 'devolvida' %}
+                                {% if user == demanda.usuario and item.status == 'devolvida' and demanda.status != 'concluida' and demanda.status != 'cancelada' %}
+                                <div class="btn-group btn-group-sm">
+                                    <a href="{% url 'demandas:item_editar' item.id %}" class="btn btn-outline-secondary me-1" title="Editar Correção">
+                                        <i class="bi bi-pencil me-1"></i>Editar
+                                    </a>
+                                    <form method="post" action="{% url 'demandas:item_reenviar' item.id %}" class="d-inline">
+                                        {% csrf_token %}
+                                        <button type="submit" class="btn btn-success" title="Reenviar para Validação">
+                                            <i class="bi bi-send me-1"></i>Reenviar
+                                        </button>
+                                    </form>
+                                </div>
+                                {% elif demanda.status == 'rascunho' and user == demanda.usuario %}
                                 <a href="{% url 'demandas:item_editar' item.id %}" class="btn btn-sm btn-outline-secondary">
                                     <i class="bi bi-pencil"></i>
                                 </a>
