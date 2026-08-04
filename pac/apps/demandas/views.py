@@ -111,7 +111,7 @@ def item_create(request, demanda_pk):
 def item_update(request, pk):
     item = get_object_or_404(ItemDemanda, pk=pk)
 
-    if not request.user.is_admin_user and item.demanda.usuario != request.user:
+    if item.demanda.usuario != request.user:
         messages.error(request, "Você não tem permissão para editar este item.")
         return redirect("demandas:lista")
 
@@ -138,6 +138,49 @@ def item_update(request, pk):
 
     return render(request, "crud/form.html", {"form": form, "titulo": "Editar Item"})
 
+
+from django.views.decorators.http import require_POST
+from django.core.exceptions import ValidationError
+from .services import validar_item_para_envio
+
+
+@require_POST
+@login_required
+def item_reenviar(request, pk):
+    with transaction.atomic():
+        item = ItemDemanda.objects.select_for_update().select_related("demanda").filter(pk=pk).first()
+        if item is None:
+            messages.error(request, "Item não encontrado.")
+            return redirect("demandas:lista")
+
+        demanda = Demanda.objects.select_for_update().get(pk=item.demanda_id)
+
+        if item.demanda.usuario != request.user:
+            messages.error(request, "Você não tem permissão para reenviar este item.")
+            return redirect("demandas:detalhe", pk=item.demanda_id)
+
+        if demanda.status in [StatusDemanda.CONCLUIDA, StatusDemanda.CANCELADA]:
+            messages.error(request, "Não é permitido alterar solicitações encerradas ou canceladas.")
+            return redirect("demandas:detalhe", pk=item.demanda_id)
+
+        if item.status != StatusItemDemanda.DEVOLVIDA:
+            messages.error(request, "Somente itens devolvidos podem ser reenviados para validação.")
+            return redirect("demandas:detalhe", pk=item.demanda_id)
+
+        try:
+            validar_item_para_envio(item)
+        except ValidationError as ve:
+            msg = ve.message if hasattr(ve, "message") else str(ve)
+            messages.error(request, f"Erro ao reenviar item: {msg}")
+            return redirect("demandas:detalhe", pk=item.demanda_id)
+
+        item.status = StatusItemDemanda.AGUARDANDO_VALIDACAO
+        item.save(update_fields=["status", "atualizado_em"])
+        sincronizar_status_macro_demanda(demanda)
+
+    messages.success(request, "Item reenviado para validação com sucesso.")
+    return redirect("demandas:detalhe", pk=item.demanda_id)
+
 @login_required
 def demanda_enviar(request, pk):
     with transaction.atomic():
@@ -158,6 +201,14 @@ def demanda_enviar(request, pk):
         if not pode_transicionar_demanda(demanda.status, StatusDemanda.AGUARDANDO_VALIDACAO):
             messages.error(request, f"Transição inválida de {demanda.status} para {StatusDemanda.AGUARDANDO_VALIDACAO}.")
             return redirect("demandas:detalhe", pk=pk)
+
+        for item in demanda.itens.all():
+            try:
+                validar_item_para_envio(item)
+            except ValidationError as ve:
+                msg = ve.message if hasattr(ve, "message") else str(ve)
+                messages.error(request, f"Erro no item '{item.nome}': {msg}")
+                return redirect("demandas:detalhe", pk=pk)
 
         demanda.enviada_em = timezone.now()
         demanda.save(update_fields=["enviada_em", "atualizado_em"])

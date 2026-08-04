@@ -10,6 +10,7 @@ export default function DemandaDetail() {
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
   const [mensagem, setMensagem] = useState("");
+  const [reenviandoId, setReenviandoId] = useState(null);
 
   const carregar = useCallback(() => {
     setCarregando(true);
@@ -44,6 +45,22 @@ export default function DemandaDetail() {
       </div>
     );
   if (!demanda) return null;
+
+  async function handleReenviarItem(itemId) {
+    if (!window.confirm("Deseja reenviar este item para validação?")) return;
+    setErro("");
+    setMensagem("");
+    setReenviandoId(itemId);
+    try {
+      const res = await api.reenviarItem(itemId);
+      setMensagem(res.detail || "Item reenviado para validação com sucesso.");
+      await carregar();
+    } catch (e) {
+      setErro(e.message || "Erro ao reenviar item.");
+    } finally {
+      setReenviandoId(null);
+    }
+  }
 
   const isRascunho = demanda.status === "rascunho";
 
@@ -100,12 +117,28 @@ export default function DemandaDetail() {
                 <th>Valor unit.</th>
                 <th>Valor total</th>
                 <th>Status</th>
+                <th className="text-end">Ações</th>
               </tr>
             </thead>
             <tbody>
               {demanda.itens.map((item) => (
                 <tr key={item.id}>
-                  <td>{item.nome}</td>
+                  <td>
+                    <div>{item.nome}</div>
+                    {item.status === "devolvida" && item.justificativa_devolucao && (
+                      <div className="alert alert-warning py-1 px-2 mt-1 mb-0 small" role="alert">
+                        <strong><i className="bi bi-exclamation-triangle me-1"></i>Parecer da Devolução:</strong> {item.justificativa_devolucao}
+                        {item.ultima_devolucao?.responsavel?.nome && (
+                          <span className="ms-2 text-muted">({item.ultima_devolucao.responsavel.nome})</span>
+                        )}
+                      </div>
+                    )}
+                    {item.observacoes && (
+                      <div className="text-muted small mt-1">
+                        <strong>Obs. do Solicitante:</strong> {item.observacoes}
+                      </div>
+                    )}
+                  </td>
                   <td>{item.quantidade}</td>
                   <td>{formatCurrency(item.valor_estimado)}</td>
                   <td>{formatCurrency(item.valor_total)}</td>
@@ -113,6 +146,26 @@ export default function DemandaDetail() {
                     <span className={`badge ${statusBadge(item.status)}`}>
                       {statusLabel(item.status)}
                     </span>
+                  </td>
+                  <td className="text-end">
+                    {item.status === "devolvida" && demanda.status !== "concluida" && demanda.status !== "cancelada" && (
+                      <div className="btn-group btn-group-sm">
+                        <Link
+                          to={`/demandas/${demanda.id}/itens/${item.id}/editar`}
+                          className="btn btn-outline-secondary me-1"
+                        >
+                          <i className="bi bi-pencil me-1"></i>Editar
+                        </Link>
+                        <button
+                          className="btn btn-success"
+                          disabled={reenviandoId === item.id}
+                          onClick={() => handleReenviarItem(item.id)}
+                        >
+                          <i className="bi bi-send me-1"></i>
+                          {reenviandoId === item.id ? "Reenviando..." : "Reenviar"}
+                        </button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -123,6 +176,7 @@ export default function DemandaDetail() {
                   Total
                 </th>
                 <th>{formatCurrency(demanda.valor_total)}</th>
+                <th></th>
                 <th></th>
               </tr>
             </tfoot>

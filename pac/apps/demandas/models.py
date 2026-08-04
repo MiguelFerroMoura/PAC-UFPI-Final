@@ -192,6 +192,12 @@ class ItemDemanda(models.Model):
         max_length=200
     )
 
+    observacoes = models.TextField(
+        verbose_name="Observações do Solicitante",
+        blank=True,
+        default=""
+    )
+
     # Status independente por item (RN19).
     status = models.CharField(
         verbose_name="Status",

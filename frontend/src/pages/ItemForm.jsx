@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
 
@@ -14,14 +14,46 @@ const CAMPOS_INICIAIS = {
   justificativa_prioridade: "",
   justificativa_necessidade: "",
   indicacao_orcamentaria: "",
+  observacoes: "",
 };
 
 export default function ItemForm() {
-  const { id } = useParams(); // id da demanda
+  const { id, itemId } = useParams(); // id da demanda, itemId opcional
+  const isEditing = Boolean(itemId);
   const navigate = useNavigate();
   const [form, setForm] = useState(CAMPOS_INICIAIS);
   const [erro, setErro] = useState("");
+  const [carregandoItem, setCarregandoItem] = useState(isEditing);
   const [enviando, setEnviando] = useState(false);
+
+  useEffect(() => {
+    if (!isEditing) return;
+    setCarregandoItem(true);
+    api
+      .getItem(itemId)
+      .then((data) => {
+        if (String(data.demanda) !== String(id)) {
+          setErro("Este item não pertence à demanda informada.");
+          return;
+        }
+        setForm({
+          tipo: data.tipo || "material",
+          nome: data.nome || "",
+          descricao: data.descricao || "",
+          unidade_medida: data.unidade_medida || "",
+          quantidade: data.quantidade || 1,
+          valor_estimado: data.valor_estimado || "",
+          data_prevista: data.data_prevista || "",
+          prioridade: data.prioridade || "media",
+          justificativa_prioridade: data.justificativa_prioridade || "",
+          justificativa_necessidade: data.justificativa_necessidade || "",
+          indicacao_orcamentaria: data.indicacao_orcamentaria || "",
+          observacoes: data.observacoes || "",
+        });
+      })
+      .catch((err) => setErro(err.message || "Erro ao carregar item."))
+      .finally(() => setCarregandoItem(false));
+  }, [id, itemId, isEditing]);
 
   function atualizar(campo, valor) {
     setForm((atual) => ({ ...atual, [campo]: valor }));
@@ -31,23 +63,32 @@ export default function ItemForm() {
     e.preventDefault();
     setErro("");
     setEnviando(true);
+    const payload = {
+      ...form,
+      quantidade: Number(form.quantidade),
+    };
     try {
-      await api.addItem(id, {
-        ...form,
-        quantidade: Number(form.quantidade),
-      });
+      if (isEditing) {
+        await api.updateItem(itemId, payload);
+      } else {
+        await api.addItem(id, payload);
+      }
       navigate(`/demandas/${id}`);
     } catch (err) {
-      setErro(err.message || "Não foi possível adicionar o item.");
+      setErro(err.message || "Não foi possível salvar o item.");
     } finally {
       setEnviando(false);
     }
   }
 
+  if (carregandoItem) {
+    return <div className="text-center py-5">Carregando dados do item...</div>;
+  }
+
   return (
     <div className="row justify-content-center">
       <div className="col-md-8">
-        <h1 className="h4 mb-3">Adicionar item</h1>
+        <h1 className="h4 mb-3">{isEditing ? "Editar item" : "Adicionar item"}</h1>
 
         {erro && (
           <div className="alert alert-danger" role="alert">
@@ -209,10 +250,23 @@ export default function ItemForm() {
                 required
               />
             </div>
+            <div className="col-12">
+              <label htmlFor="observacoes" className="form-label">
+                Observações do solicitante (opcional)
+              </label>
+              <textarea
+                id="observacoes"
+                className="form-control"
+                rows={2}
+                value={form.observacoes}
+                onChange={(e) => atualizar("observacoes", e.target.value)}
+                placeholder="Insira detalhes sobre correções efetuadas ou observações adicionais"
+              />
+            </div>
           </div>
 
           <button className="btn btn-primary mt-3" disabled={enviando}>
-            {enviando ? "Salvando..." : "Adicionar item"}
+            {enviando ? "Salvando..." : isEditing ? "Salvar alterações" : "Adicionar item"}
           </button>
         </form>
       </div>
