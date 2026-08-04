@@ -415,6 +415,40 @@ class SincronizacaoMacroTests(APITestCase):
         status_calc = sincronizar_status_macro_demanda(self.demanda)
         self.assertEqual(status_calc, StatusDemanda.CONCLUIDA)
 
+    def test_todos_itens_cancelados_eh_cancelada(self):
+        ItemDemanda.objects.create(
+            demanda=self.demanda, tipo="material", nome="A", quantidade=1,
+            valor_estimado=Decimal("10"), valor_total=Decimal("10"),
+            data_prevista=date(2027, 1, 1), status=StatusItemDemanda.CANCELADA,
+        )
+        status_calc = sincronizar_status_macro_demanda(self.demanda)
+        self.assertEqual(status_calc, StatusDemanda.CANCELADA)
+
+    def test_cancelados_com_ativos_ignora_cancelados(self):
+        ItemDemanda.objects.create(
+            demanda=self.demanda, tipo="material", nome="A", quantidade=1,
+            valor_estimado=Decimal("10"), valor_total=Decimal("10"),
+            data_prevista=date(2027, 1, 1), status=StatusItemDemanda.CANCELADA,
+        )
+        ItemDemanda.objects.create(
+            demanda=self.demanda, tipo="material", nome="B", quantidade=1,
+            valor_estimado=Decimal("10"), valor_total=Decimal("10"),
+            data_prevista=date(2027, 1, 1), status=StatusItemDemanda.VINCULADA_DFD,
+        )
+        status_calc = sincronizar_status_macro_demanda(self.demanda)
+        self.assertEqual(status_calc, StatusDemanda.CONCLUIDA)
+
+    def test_demanda_cancelada_nao_reativa_com_sincronizacao(self):
+        self.demanda.status = StatusDemanda.CANCELADA
+        self.demanda.save()
+        ItemDemanda.objects.create(
+            demanda=self.demanda, tipo="material", nome="A", quantidade=1,
+            valor_estimado=Decimal("10"), valor_total=Decimal("10"),
+            data_prevista=date(2027, 1, 1), status=StatusItemDemanda.VINCULADA_DFD,
+        )
+        status_calc = sincronizar_status_macro_demanda(self.demanda)
+        self.assertEqual(status_calc, StatusDemanda.CANCELADA)
+
     def test_idempotencia_da_sincronizacao(self):
         ItemDemanda.objects.create(
             demanda=self.demanda, tipo="material", nome="A", quantidade=1,
@@ -422,9 +456,25 @@ class SincronizacaoMacroTests(APITestCase):
             data_prevista=date(2027, 1, 1), status=StatusItemDemanda.VINCULADA_DFD,
         )
         s1 = sincronizar_status_macro_demanda(self.demanda)
+        self.demanda.refresh_from_db()
+        st1 = self.demanda.status
         s2 = sincronizar_status_macro_demanda(self.demanda)
+        self.demanda.refresh_from_db()
+        st2 = self.demanda.status
         self.assertEqual(s1, s2)
-        self.assertEqual(s2, StatusDemanda.CONCLUIDA)
+        self.assertEqual(st1, st2)
+        self.assertEqual(st2, StatusDemanda.CONCLUIDA)
+
+    def test_patch_direto_nao_altera_status_da_demanda(self):
+        self.client.force_login(self.user)
+        resp = self.client.patch(
+            reverse("api:demanda-detail", kwargs={"pk": self.demanda.pk}),
+            {"status": StatusDemanda.CONCLUIDA, "observacao": "Tentativa"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.demanda.refresh_from_db()
+        self.assertEqual(self.demanda.status, StatusDemanda.RASCUNHO)
 
 
 # =============================================================================
