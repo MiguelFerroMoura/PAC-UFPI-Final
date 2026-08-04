@@ -240,6 +240,7 @@ class ValidacaoTests(APITestCase):
 
     def test_reenviar_item_devolvido(self):
         self.item.status = StatusItemDemanda.DEVOLVIDA
+        self.item.justificativa_necessidade = "Justificativa válida"
         self.item.save()
         self.client.force_login(self.user)
         resp = self.client.post(
@@ -633,6 +634,141 @@ class ServerSideIntegrationTests(APITestCase):
         self.assertEqual(item.status, StatusItemDemanda.VALIDADA)
         self.demanda.refresh_from_db()
         self.assertEqual(self.demanda.status, StatusDemanda.EM_ANDAMENTO)
+
+    def test_server_side_item_reenviar(self):
+        from apps.validacoes.models import Validacao, TipoAcao
+        item = ItemDemanda.objects.create(
+            demanda=self.demanda, tipo="material", nome="Teclado", quantidade=1,
+            valor_estimado=Decimal("100"), valor_total=Decimal("100"),
+            data_prevista=date(2027, 1, 1), status=StatusItemDemanda.DEVOLVIDA,
+            justificativa_necessidade="Necessário",
+        )
+        Validacao.objects.create(item_demanda=item, usuario=self.admin, acao=TipoAcao.DEVOLVIDO, comentario="Corrigir descrição")
+
+        self.client.force_login(self.user)
+        resp = self.client.post(reverse("demandas:item_reenviar", kwargs={"pk": item.pk}))
+        self.assertEqual(resp.status_code, status.HTTP_302_FOUND)
+        item.refresh_from_db()
+        self.assertEqual(item.status, StatusItemDemanda.AGUARDANDO_VALIDACAO)
+        self.demanda.refresh_from_db()
+        self.assertEqual(self.demanda.status, StatusDemanda.AGUARDANDO_VALIDACAO)
+
+
+class ItemDevolvidoCorrecaoTests(APITestCase):
+    def setUp(self):
+        self.unidade = criar_unidade()
+        self.user = criar_usuario(username="solicitante", unidade=self.unidade)
+        self.outro_user = criar_usuario(username="outro", unidade=self.unidade)
+        self.admin = criar_usuario(username="admin_test", is_staff=True, perfil="admin")
+        self.demanda = Demanda.objects.create(
+            unidade=self.unidade, usuario=self.user, ano_referencia=2027,
+            status=StatusDemanda.EM_ANDAMENTO,
+        )
+        self.item = ItemDemanda.objects.create(
+            demanda=self.demanda, tipo="material", nome="Impressora", quantidade=1,
+            valor_estimado=Decimal("800"), valor_total=Decimal("800"),
+            data_prevista=date(2027, 5, 1), prioridade="media",
+            justificativa_prioridade="a", justificativa_necessidade="b",
+            indicacao_orcamentaria="c", status=StatusItemDemanda.DEVOLVIDA,
+        )
+        from apps.validacoes.models import Validacao, TipoAcao
+        self.val1 = Validacao.objects.create(
+            item_demanda=self.item, usuario=self.admin, acao=TipoAcao.DEVOLVIDO, comentario="Primeira devolução: ajustar marca."
+        )
+
+    def test_item_devolvido_exibe_ultima_justificativa(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("api:item-detail", kwargs={"pk": self.item.pk}))
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["justificativa_devolucao"], "Primeira devolução: ajustar marca.")
+        self.assertIsNotNone(resp.data["ultima_devolucao"])
+        self.assertEqual(resp.data["ultima_devolucao"]["comentario"], "Primeira devolução: ajustar marca.")
+
+    def test_item_devolvido_exibe_justificativa_mais_recente(self):
+        from apps.validacoes.models import Validacao, TipoAcao
+        Validacao.objects.create(
+            item_demanda=self.item, usuario=self.admin, acao=TipoAcao.DEVOLVIDO, comentario="Segunda devolução: ajustar cotação."
+        )
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("api:item-detail", kwargs={"pk": self.item.pk}))
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["justificativa_devolucao"], "Segunda devolução: ajustar cotação.")
+        self.assertEqual(Validacao.objects.filter(item_demanda=self.item).count(), 2)
+
+    def test_editar_item_devolvido_salva_observacoes_e_mantem_status(self):
+        self.client.force_login(self.user)
+        resp = self.client.put(
+            reverse("api:item-detail", kwargs={"pk": self.item.pk}),
+            {
+                "tipo": "material", "nome": "Impressora Laser", "descricao": "Multifuncional",
+                "unidade_medida": "un", "quantidade": 2, "valor_estimado": "900.00",
+                "data_prevista": "2027-05-01", "prioridade": "media",
+                "justificativa_prioridade": "a", "justificativa_necessidade": "b",
+                "indicacao_orcamentaria": "c", "observacoes": "Ajustada marca e modelo conforme solicitado.",
+            },
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.nome, "Impressora Laser")
+        self.assertEqual(self.item.observacoes, "Ajustada marca e modelo conforme solicitado.")
+        self.assertEqual(self.item.status, StatusItemDemanda.DEVOLVIDA)
+
+    def test_observacao_do_solicitante_nao_substitui_justificativa_admin(self):
+        self.client.force_login(self.user)
+        self.client.patch(
+            reverse("api:item-detail", kwargs={"pk": self.item.pk}),
+            {"observacoes": "Observação do usuário"},
+            format="json",
+        )
+        self.val1.refresh_from_db()
+        self.assertEqual(self.val1.comentario, "Primeira devolução: ajustar marca.")
+
+    def test_reenviar_item_devolvido_sucesso(self):
+        self.client.force_login(self.user)
+        resp = self.client.post(reverse("api:item-reenviar", kwargs={"pk": self.item.pk}))
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["detail"], "Item reenviado para validação com sucesso.")
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.status, StatusItemDemanda.AGUARDANDO_VALIDACAO)
+        self.demanda.refresh_from_db()
+        self.assertEqual(self.demanda.status, StatusDemanda.AGUARDANDO_VALIDACAO)
+
+    def test_reenviar_item_nao_devolvido_rejeita(self):
+        self.item.status = StatusItemDemanda.AGUARDANDO_VALIDACAO
+        self.item.save()
+        self.client.force_login(self.user)
+        resp = self.client.post(reverse("api:item-reenviar", kwargs={"pk": self.item.pk}))
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_reenviar_item_de_demanda_concluida_rejeita(self):
+        self.demanda.status = StatusDemanda.CONCLUIDA
+        self.demanda.save()
+        self.client.force_login(self.user)
+        resp = self.client.post(reverse("api:item-reenviar", kwargs={"pk": self.item.pk}))
+        self.assertEqual(resp.status_code, status.HTTP_409_CONFLICT)
+
+    def test_outro_usuario_nao_edita_nem_reenvia_item(self):
+        self.client.force_login(self.outro_user)
+        edit_resp = self.client.patch(
+            reverse("api:item-detail", kwargs={"pk": self.item.pk}),
+            {"nome": "Hacked"}, format="json",
+        )
+        self.assertEqual(edit_resp.status_code, status.HTTP_404_NOT_FOUND)
+
+        resend_resp = self.client.post(reverse("api:item-reenviar", kwargs={"pk": self.item.pk}))
+        self.assertEqual(resend_resp.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_admin_visualiza_mas_nao_edita_item(self):
+        self.client.force_login(self.admin)
+        get_resp = self.client.get(reverse("api:item-detail", kwargs={"pk": self.item.pk}))
+        self.assertEqual(get_resp.status_code, status.HTTP_200_OK)
+
+        edit_resp = self.client.patch(
+            reverse("api:item-detail", kwargs={"pk": self.item.pk}),
+            {"nome": "Admin Edit"}, format="json",
+        )
+        self.assertEqual(edit_resp.status_code, status.HTTP_403_FORBIDDEN)
 
 
 # =============================================================================

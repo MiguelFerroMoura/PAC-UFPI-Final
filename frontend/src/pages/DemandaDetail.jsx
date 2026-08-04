@@ -10,6 +10,7 @@ export default function DemandaDetail() {
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
   const [mensagem, setMensagem] = useState("");
+  const [reenviandoId, setReenviandoId] = useState(null);
 
   const carregar = useCallback(() => {
     setCarregando(true);
@@ -44,8 +45,6 @@ export default function DemandaDetail() {
       </div>
     );
   if (!demanda) return null;
-
-  const [reenviandoId, setReenviandoId] = useState(null);
 
   async function handleReenviarItem(itemId) {
     if (!window.confirm("Deseja reenviar este item para validação?")) return;
