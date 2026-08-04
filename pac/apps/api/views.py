@@ -119,9 +119,20 @@ class DemandaViewSet(viewsets.ModelViewSet):
     serializer_class = DemandaSerializer
 
     def get_queryset(self):
+        from django.db.models import Prefetch
+        from apps.validacoes.models import Validacao, TipoAcao
+        ultima_devolucao_prefetch = Prefetch(
+            "validacoes",
+            queryset=Validacao.objects.filter(acao=TipoAcao.DEVOLVIDO).select_related("usuario").order_by("-criado_em", "-id"),
+            to_attr="devolucoes_prefetched"
+        )
+        itens_prefetch = Prefetch(
+            "itens",
+            queryset=ItemDemanda.objects.prefetch_related(ultima_devolucao_prefetch)
+        )
         qs = (
             Demanda.objects.select_related("unidade", "usuario")
-            .prefetch_related("itens")
+            .prefetch_related(itens_prefetch)
         )
         user = self.request.user
         if not user.is_admin_user:
@@ -141,7 +152,7 @@ class DemandaViewSet(viewsets.ModelViewSet):
 
     def _pode_editar(self, demanda):
         user = self.request.user
-        return user.is_admin_user or demanda.usuario_id == user.id
+        return demanda.usuario_id == user.id
 
     def update(self, request, *args, **kwargs):
         demanda = self.get_object()
@@ -172,7 +183,7 @@ class DemandaViewSet(viewsets.ModelViewSet):
 
         if not self._pode_editar(demanda):
             return Response(
-                {"detail": "Você não tem permissão para adicionar itens."},
+                {"detail": "Você não tem permissão para alterar esta demanda."},
                 status=status.HTTP_403_FORBIDDEN,
             )
         if demanda.status in [StatusDemanda.CONCLUIDA, StatusDemanda.CANCELADA]:
@@ -259,7 +270,14 @@ class ItemDemandaViewSet(viewsets.ModelViewSet):
     serializer_class = ItemDemandaSerializer
 
     def get_queryset(self):
-        qs = ItemDemanda.objects.select_related("demanda", "demanda__usuario")
+        from django.db.models import Prefetch
+        from apps.validacoes.models import Validacao, TipoAcao
+        ultima_devolucao_prefetch = Prefetch(
+            "validacoes",
+            queryset=Validacao.objects.filter(acao=TipoAcao.DEVOLVIDO).select_related("usuario").order_by("-criado_em", "-id"),
+            to_attr="devolucoes_prefetched"
+        )
+        qs = ItemDemanda.objects.select_related("demanda", "demanda__usuario").prefetch_related(ultima_devolucao_prefetch)
         user = self.request.user
         if not user.is_admin_user:
             qs = qs.filter(demanda__usuario=user)
@@ -267,7 +285,7 @@ class ItemDemandaViewSet(viewsets.ModelViewSet):
 
     def _pode_editar(self, item):
         user = self.request.user
-        return user.is_admin_user or item.demanda.usuario_id == user.id
+        return item.demanda.usuario_id == user.id
 
     def update(self, request, *args, **kwargs):
         item = self.get_object()

@@ -79,6 +79,8 @@ class ItemDemandaSerializer(serializers.ModelSerializer):
         max_digits=14, decimal_places=2, read_only=True
     )
     status_display = serializers.CharField(source="get_status_display", read_only=True)
+    justificativa_devolucao = serializers.SerializerMethodField()
+    ultima_devolucao = serializers.SerializerMethodField()
 
     class Meta:
         model = ItemDemanda
@@ -86,10 +88,38 @@ class ItemDemandaSerializer(serializers.ModelSerializer):
             "id", "demanda", "item_catalogo", "tipo", "nome", "descricao",
             "unidade_medida", "quantidade", "valor_estimado", "valor_total",
             "data_prevista", "prioridade", "justificativa_prioridade",
-            "justificativa_necessidade", "indicacao_orcamentaria",
-            "status", "status_display",
+            "justificativa_necessidade", "indicacao_orcamentaria", "observacoes",
+            "status", "status_display", "justificativa_devolucao", "ultima_devolucao",
         ]
         read_only_fields = ["demanda", "status"]
+
+    def get_ultima_devolucao(self, obj):
+        devolucoes = getattr(obj, "devolucoes_prefetched", None)
+        if devolucoes is not None:
+            val = devolucoes[0] if devolucoes else None
+        else:
+            from apps.validacoes.models import Validacao, TipoAcao
+            val = (
+                obj.validacoes.filter(acao=TipoAcao.DEVOLVIDO)
+                .select_related("usuario")
+                .order_by("-criado_em", "-id")
+                .first()
+            )
+        if not val:
+            return None
+        return {
+            "id": val.id,
+            "comentario": val.comentario,
+            "criado_em": val.criado_em,
+            "responsavel": {
+                "id": val.usuario_id,
+                "nome": val.usuario.get_full_name() or val.usuario.username,
+            },
+        }
+
+    def get_justificativa_devolucao(self, obj):
+        val_data = self.get_ultima_devolucao(obj)
+        return val_data["comentario"] if val_data else ""
 
     def create(self, validated_data):
         validated_data["valor_total"] = (
