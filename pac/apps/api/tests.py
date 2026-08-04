@@ -7,6 +7,7 @@ pela API consumida pelo front-end React.
 
 from datetime import date
 from decimal import Decimal
+from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.urls import reverse
@@ -302,6 +303,96 @@ class DFDTests(APITestCase):
             format="json",
         )
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_consolidacao_reverte_todas_as_escritas_em_falha_intermediaria(self):
+        self.client.force_login(self.admin)
+        with mock.patch("apps.api.views.sincronizar_status_macro_demanda", side_effect=RuntimeError("Falha simulada")):
+            with self.assertRaises(RuntimeError):
+                self.client.post(
+                    reverse("api:dfd-consolidar"),
+                    {"numero": "DFD-FAIL", "grupo": self.grupo.pk, "itens": [self.item.pk]},
+                    format="json",
+                )
+        self.assertEqual(DFD.objects.filter(numero="DFD-FAIL").count(), 0)
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.status, StatusItemDemanda.VALIDADA)
+        self.demanda.refresh_from_db()
+        self.assertEqual(self.demanda.status, StatusDemanda.EM_ANDAMENTO)
+
+    def test_consolidar_itens_de_multiplas_demandas_sincroniza_todas(self):
+        demanda_b = Demanda.objects.create(
+            unidade=self.unidade, usuario=self.user, ano_referencia=2027,
+            status=StatusDemanda.EM_ANDAMENTO
+        )
+        item_b = ItemDemanda.objects.create(
+            demanda=demanda_b, tipo="material", nome="Y", descricao="d2",
+            unidade_medida="un", quantidade=1, valor_estimado=Decimal("20"),
+            valor_total=Decimal("20"), data_prevista=date(2027, 1, 1),
+            prioridade="media", justificativa_prioridade="a",
+            justificativa_necessidade="b", indicacao_orcamentaria="c",
+            status=StatusItemDemanda.VALIDADA,
+        )
+        self.client.force_login(self.admin)
+        resp = self.client.post(
+            reverse("api:dfd-consolidar"),
+            {"numero": "DFD-MULTI", "grupo": self.grupo.pk, "itens": [self.item.pk, item_b.pk]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(DFD.objects.filter(numero="DFD-MULTI").count(), 1)
+        self.item.refresh_from_db()
+        item_b.refresh_from_db()
+        self.assertEqual(self.item.status, StatusItemDemanda.VINCULADA_DFD)
+        self.assertEqual(item_b.status, StatusItemDemanda.VINCULADA_DFD)
+        self.demanda.refresh_from_db()
+        demanda_b.refresh_from_db()
+        self.assertEqual(self.demanda.status, StatusDemanda.CONCLUIDA)
+        self.assertEqual(demanda_b.status, StatusDemanda.CONCLUIDA)
+
+    def test_consolidar_rejeita_id_inexistente(self):
+        self.client.force_login(self.admin)
+        resp = self.client.post(
+            reverse("api:dfd-consolidar"),
+            {"numero": "DFD-BAD-ID", "grupo": self.grupo.pk, "itens": [999999]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(DFD.objects.filter(numero="DFD-BAD-ID").count(), 0)
+
+    def test_consolidar_rejeita_ids_duplicados(self):
+        self.client.force_login(self.admin)
+        resp = self.client.post(
+            reverse("api:dfd-consolidar"),
+            {"numero": "DFD-DUP", "grupo": self.grupo.pk, "itens": [self.item.pk, self.item.pk]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        dfd = DFD.objects.get(numero="DFD-DUP")
+        self.assertEqual(dfd.itens_demanda.count(), 1)
+
+    def test_consolidar_rejeita_item_ja_vinculado(self):
+        self.item.status = StatusItemDemanda.VINCULADA_DFD
+        self.item.save()
+        self.client.force_login(self.admin)
+        resp = self.client.post(
+            reverse("api:dfd-consolidar"),
+            {"numero": "DFD-ALREADY", "grupo": self.grupo.pk, "itens": [self.item.pk]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(DFD.objects.filter(numero="DFD-ALREADY").count(), 0)
+
+    def test_consolidar_rejeita_item_de_demanda_concluida(self):
+        self.demanda.status = StatusDemanda.CONCLUIDA
+        self.demanda.save()
+        self.client.force_login(self.admin)
+        resp = self.client.post(
+            reverse("api:dfd-consolidar"),
+            {"numero": "DFD-CLOSED", "grupo": self.grupo.pk, "itens": [self.item.pk]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(DFD.objects.filter(numero="DFD-CLOSED").count(), 0)
 
     def test_fluxo_completo_ciclo_de_vida(self):
         # 1. Usuário cria demanda em rascunho
