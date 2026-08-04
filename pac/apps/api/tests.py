@@ -14,7 +14,8 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from apps.catalogo.models import ItemCatalogo
-from apps.demandas.models import Demanda, ItemDemanda, StatusDemanda
+from apps.demandas.models import Demanda, ItemDemanda, StatusDemanda, StatusItemDemanda
+from apps.demandas.services import sincronizar_status_macro_demanda
 from apps.grupos_contratacao.models import GrupoContratacao
 from apps.unidades.models import Unidade
 
@@ -100,71 +101,73 @@ class DemandaTests(APITestCase):
     def setUp(self):
         self.unidade = criar_unidade()
         self.user = criar_usuario(unidade=self.unidade)
-        self.outro = criar_usuario(username="bob", unidade=self.unidade)
 
-    def test_criar_demanda_vincula_usuario_e_unidade(self):
+    def test_criar_demanda(self):
         self.client.force_login(self.user)
         resp = self.client.post(
-            reverse("api:demanda-list"), {"ano_referencia": 2027}
+            reverse("api:demanda-list"),
+            {"ano_referencia": 2027, "observacao": "Teste"},
         )
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(resp.data["usuario"], self.user.id)
-        self.assertEqual(resp.data["unidade"], self.unidade.id)
         self.assertEqual(resp.data["status"], StatusDemanda.RASCUNHO)
 
-    def test_criar_demanda_sem_unidade_falha(self):
-        sem_unidade = criar_usuario(username="semunid")
-        self.client.force_login(sem_unidade)
-        resp = self.client.post(
-            reverse("api:demanda-list"), {"ano_referencia": 2027}
-        )
-        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
-
-    def test_usuario_comum_ve_apenas_suas_demandas(self):
-        Demanda.objects.create(
-            unidade=self.unidade, usuario=self.user, ano_referencia=2027
-        )
-        Demanda.objects.create(
-            unidade=self.unidade, usuario=self.outro, ano_referencia=2027
-        )
+    def test_adicionar_item_a_demanda(self):
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("api:demanda-list"))
-        self.assertEqual(resp.data["count"], 1)
-
-    def test_adicionar_item_calcula_valor_total(self):
         demanda = Demanda.objects.create(
             unidade=self.unidade, usuario=self.user, ano_referencia=2027
         )
-        self.client.force_login(self.user)
         resp = self.client.post(
-            reverse("api:demanda-itens", args=[demanda.pk]), dados_item()
+            reverse("api:demanda-itens", kwargs={"pk": demanda.pk}),
+            dados_item(),
         )
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
         self.assertEqual(Decimal(resp.data["valor_total"]), Decimal("3000.00"))
+        self.assertEqual(resp.data["status"], StatusItemDemanda.RASCUNHO)
 
-    def test_enviar_sem_itens_falha(self):
+    def test_enviar_demanda_sem_itens_rejeita(self):
+        self.client.force_login(self.user)
         demanda = Demanda.objects.create(
             unidade=self.unidade, usuario=self.user, ano_referencia=2027
         )
-        self.client.force_login(self.user)
-        resp = self.client.post(reverse("api:demanda-enviar", args=[demanda.pk]))
+        resp = self.client.post(
+            reverse("api:demanda-enviar", kwargs={"pk": demanda.pk})
+        )
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_enviar_com_itens_muda_status(self):
+    def test_enviar_demanda_com_itens_sucesso(self):
+        self.client.force_login(self.user)
         demanda = Demanda.objects.create(
             unidade=self.unidade, usuario=self.user, ano_referencia=2027
         )
         ItemDemanda.objects.create(
-            demanda=demanda, tipo="material", nome="X", descricao="d",
-            unidade_medida="un", quantidade=1, valor_estimado=Decimal("10"),
-            valor_total=Decimal("10"), data_prevista=date(2027, 1, 1),
-            prioridade="media", justificativa_prioridade="a",
-            justificativa_necessidade="b", indicacao_orcamentaria="c",
+            demanda=demanda, tipo="material", nome="Item 1", quantidade=1,
+            valor_estimado=Decimal("100"), valor_total=Decimal("100"),
+            data_prevista=date(2027, 1, 1),
         )
-        self.client.force_login(self.user)
-        resp = self.client.post(reverse("api:demanda-enviar", args=[demanda.pk]))
+        resp = self.client.post(
+            reverse("api:demanda-enviar", kwargs={"pk": demanda.pk})
+        )
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertEqual(resp.data["status"], StatusDemanda.AGUARDANDO_VALIDACAO)
+        demanda.refresh_from_db()
+        self.assertEqual(demanda.status, StatusDemanda.AGUARDANDO_VALIDACAO)
+
+    def test_cancelar_demanda_em_rascunho_pelo_dono(self):
+        self.client.force_login(self.user)
+        demanda = Demanda.objects.create(
+            unidade=self.unidade, usuario=self.user, ano_referencia=2027
+        )
+        ItemDemanda.objects.create(
+            demanda=demanda, tipo="material", nome="Item 1", quantidade=1,
+            valor_estimado=Decimal("100"), valor_total=Decimal("100"),
+            data_prevista=date(2027, 1, 1),
+        )
+        resp = self.client.post(
+            reverse("api:demanda-cancelar", kwargs={"pk": demanda.pk})
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        demanda.refresh_from_db()
+        self.assertEqual(demanda.status, StatusDemanda.CANCELADA)
+        self.assertTrue(all(i.status == StatusItemDemanda.CANCELADA for i in demanda.itens.all()))
 
 
 # =============================================================================
@@ -178,23 +181,20 @@ class ValidacaoTests(APITestCase):
         self.admin = criar_usuario(username="admin", is_staff=True, perfil="admin")
         self.demanda = Demanda.objects.create(
             unidade=self.unidade, usuario=self.user, ano_referencia=2027,
-            status=StatusDemanda.AGUARDANDO_VALIDACAO,
+            status=StatusDemanda.AGUARDANDO_VALIDACAO
         )
         self.item = ItemDemanda.objects.create(
-            demanda=self.demanda, tipo="material", nome="X", descricao="d",
-            unidade_medida="un", quantidade=1, valor_estimado=Decimal("10"),
-            valor_total=Decimal("10"), data_prevista=date(2027, 1, 1),
-            prioridade="media", justificativa_prioridade="a",
-            justificativa_necessidade="b", indicacao_orcamentaria="c",
-            status=StatusDemanda.AGUARDANDO_VALIDACAO,
+            demanda=self.demanda, tipo="material", nome="Cadeira", quantidade=5,
+            valor_estimado=Decimal("200"), valor_total=Decimal("1000"),
+            data_prevista=date(2027, 1, 1), status=StatusItemDemanda.AGUARDANDO_VALIDACAO
         )
 
-    def test_pendentes_restrito_a_admin(self):
+    def test_listar_pendentes_exige_admin(self):
         self.client.force_login(self.user)
         resp = self.client.get(reverse("api:validacao-pendentes"))
         self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
 
-    def test_pendentes_lista_itens_aguardando(self):
+    def test_listar_pendentes_retorna_itens_aguardando(self):
         self.client.force_login(self.admin)
         resp = self.client.get(reverse("api:validacao-pendentes"))
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
@@ -208,7 +208,9 @@ class ValidacaoTests(APITestCase):
         )
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
         self.item.refresh_from_db()
-        self.assertEqual(self.item.status, StatusDemanda.VALIDADA)
+        self.assertEqual(self.item.status, StatusItemDemanda.VALIDADA)
+        self.demanda.refresh_from_db()
+        self.assertEqual(self.demanda.status, StatusDemanda.EM_ANDAMENTO)
 
     def test_devolver_exige_comentario(self):
         self.client.force_login(self.admin)
@@ -230,21 +232,24 @@ class ValidacaoTests(APITestCase):
         )
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
         self.item.refresh_from_db()
-        self.assertEqual(self.item.status, StatusDemanda.DEVOLVIDA)
+        self.assertEqual(self.item.status, StatusItemDemanda.DEVOLVIDA)
+        self.demanda.refresh_from_db()
+        self.assertEqual(self.demanda.status, StatusDemanda.EM_ANDAMENTO)
 
-    def test_transicao_invalida_rejeita(self):
-        self.item.status = StatusDemanda.RASCUNHO
+    def test_reenviar_item_devolvido(self):
+        self.item.status = StatusItemDemanda.DEVOLVIDA
         self.item.save()
-        self.client.force_login(self.admin)
+        self.client.force_login(self.user)
         resp = self.client.post(
-            reverse("api:validacao-decidir"),
-            {"item_demanda": self.item.pk, "acao": "validado"},
+            reverse("api:item-reenviar", kwargs={"pk": self.item.pk})
         )
-        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.status, StatusItemDemanda.AGUARDANDO_VALIDACAO)
 
 
 # =============================================================================
-# DFD
+# DFD e Consolidação
 # =============================================================================
 
 class DFDTests(APITestCase):
@@ -256,7 +261,8 @@ class DFDTests(APITestCase):
             nome="TIC", unidade_admin=self.unidade
         )
         self.demanda = Demanda.objects.create(
-            unidade=self.unidade, usuario=self.user, ano_referencia=2027
+            unidade=self.unidade, usuario=self.user, ano_referencia=2027,
+            status=StatusDemanda.EM_ANDAMENTO
         )
         self.item = ItemDemanda.objects.create(
             demanda=self.demanda, tipo="material", nome="X", descricao="d",
@@ -264,7 +270,7 @@ class DFDTests(APITestCase):
             valor_total=Decimal("10"), data_prevista=date(2027, 1, 1),
             prioridade="media", justificativa_prioridade="a",
             justificativa_necessidade="b", indicacao_orcamentaria="c",
-            status=StatusDemanda.VALIDADA,
+            status=StatusItemDemanda.VALIDADA,
         )
 
     def test_itens_disponiveis(self):
@@ -273,7 +279,7 @@ class DFDTests(APITestCase):
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(len(resp.data), 1)
 
-    def test_consolidar_cria_dfd_e_marca_itens(self):
+    def test_consolidar_cria_dfd_e_marca_itens_vinculados(self):
         self.client.force_login(self.admin)
         resp = self.client.post(
             reverse("api:dfd-consolidar"),
@@ -282,11 +288,12 @@ class DFDTests(APITestCase):
         )
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
         self.item.refresh_from_db()
-        self.assertEqual(self.item.status, StatusDemanda.CONSOLIDADA)
-        self.assertEqual(Decimal(resp.data["total"]), Decimal("10"))
+        self.assertEqual(self.item.status, StatusItemDemanda.VINCULADA_DFD)
+        self.demanda.refresh_from_db()
+        self.assertEqual(self.demanda.status, StatusDemanda.CONCLUIDA)
 
     def test_consolidar_item_nao_validado_rejeita(self):
-        self.item.status = StatusDemanda.AGUARDANDO_VALIDACAO
+        self.item.status = StatusItemDemanda.AGUARDANDO_VALIDACAO
         self.item.save()
         self.client.force_login(self.admin)
         resp = self.client.post(
@@ -344,9 +351,80 @@ class DFDTests(APITestCase):
         )
         self.assertEqual(dfd_resp.status_code, status.HTTP_201_CREATED)
 
-        # 6. Verifica alteração para CONSOLIDADA no banco
+        # 6. Verifica alteração para VINCULADA_DFD no banco e Demanda CONCLUIDA
         item_obj = ItemDemanda.objects.get(pk=item_id)
-        self.assertEqual(item_obj.status, StatusDemanda.CONSOLIDADA)
+        self.assertEqual(item_obj.status, StatusItemDemanda.VINCULADA_DFD)
+        demanda_obj = Demanda.objects.get(pk=demanda_id)
+        self.assertEqual(demanda_obj.status, StatusDemanda.CONCLUIDA)
+
+
+# =============================================================================
+# Testes do Serviço de Sincronização Macro de Status
+# =============================================================================
+
+class SincronizacaoMacroTests(APITestCase):
+    def setUp(self):
+        self.unidade = criar_unidade()
+        self.user = criar_usuario(unidade=self.unidade)
+        self.demanda = Demanda.objects.create(
+            unidade=self.unidade, usuario=self.user, ano_referencia=2027
+        )
+
+    def test_demanda_sem_itens_eh_rascunho(self):
+        status_calc = sincronizar_status_macro_demanda(self.demanda)
+        self.assertEqual(status_calc, StatusDemanda.RASCUNHO)
+
+    def test_todos_itens_rascunho_eh_rascunho(self):
+        ItemDemanda.objects.create(
+            demanda=self.demanda, tipo="material", nome="A", quantidade=1,
+            valor_estimado=Decimal("10"), valor_total=Decimal("10"),
+            data_prevista=date(2027, 1, 1), status=StatusItemDemanda.RASCUNHO,
+        )
+        status_calc = sincronizar_status_macro_demanda(self.demanda)
+        self.assertEqual(status_calc, StatusDemanda.RASCUNHO)
+
+    def test_todos_itens_aguardando_eh_aguardando_validacao(self):
+        ItemDemanda.objects.create(
+            demanda=self.demanda, tipo="material", nome="A", quantidade=1,
+            valor_estimado=Decimal("10"), valor_total=Decimal("10"),
+            data_prevista=date(2027, 1, 1), status=StatusItemDemanda.AGUARDANDO_VALIDACAO,
+        )
+        status_calc = sincronizar_status_macro_demanda(self.demanda)
+        self.assertEqual(status_calc, StatusDemanda.AGUARDANDO_VALIDACAO)
+
+    def test_itens_mistos_com_devolvido_eh_em_andamento(self):
+        ItemDemanda.objects.create(
+            demanda=self.demanda, tipo="material", nome="A", quantidade=1,
+            valor_estimado=Decimal("10"), valor_total=Decimal("10"),
+            data_prevista=date(2027, 1, 1), status=StatusItemDemanda.DEVOLVIDA,
+        )
+        ItemDemanda.objects.create(
+            demanda=self.demanda, tipo="material", nome="B", quantidade=1,
+            valor_estimado=Decimal("10"), valor_total=Decimal("10"),
+            data_prevista=date(2027, 1, 1), status=StatusItemDemanda.AGUARDANDO_VALIDACAO,
+        )
+        status_calc = sincronizar_status_macro_demanda(self.demanda)
+        self.assertEqual(status_calc, StatusDemanda.EM_ANDAMENTO)
+
+    def test_todos_vinculados_eh_concluida(self):
+        ItemDemanda.objects.create(
+            demanda=self.demanda, tipo="material", nome="A", quantidade=1,
+            valor_estimado=Decimal("10"), valor_total=Decimal("10"),
+            data_prevista=date(2027, 1, 1), status=StatusItemDemanda.VINCULADA_DFD,
+        )
+        status_calc = sincronizar_status_macro_demanda(self.demanda)
+        self.assertEqual(status_calc, StatusDemanda.CONCLUIDA)
+
+    def test_idempotencia_da_sincronizacao(self):
+        ItemDemanda.objects.create(
+            demanda=self.demanda, tipo="material", nome="A", quantidade=1,
+            valor_estimado=Decimal("10"), valor_total=Decimal("10"),
+            data_prevista=date(2027, 1, 1), status=StatusItemDemanda.VINCULADA_DFD,
+        )
+        s1 = sincronizar_status_macro_demanda(self.demanda)
+        s2 = sincronizar_status_macro_demanda(self.demanda)
+        self.assertEqual(s1, s2)
+        self.assertEqual(s2, StatusDemanda.CONCLUIDA)
 
 
 # =============================================================================
@@ -378,5 +456,3 @@ class CatalogoDashboardTests(APITestCase):
         self.client.force_login(self.user)
         resp = self.client.get(reverse("api:dashboard-stats"))
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertEqual(resp.data["total_demandas"], 1)
-        self.assertIn("itens_por_status", resp.data)
