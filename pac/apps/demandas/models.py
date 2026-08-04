@@ -5,9 +5,17 @@ from django.db import models
 class StatusDemanda(models.TextChoices):
     RASCUNHO = "rascunho", "Rascunho"
     AGUARDANDO_VALIDACAO = "aguardando_validacao", "Aguardando Validação"
+    EM_ANDAMENTO = "em_andamento", "Em Andamento"
+    CONCLUIDA = "concluida", "Concluída"
+    CANCELADA = "cancelada", "Cancelada"
+
+
+class StatusItemDemanda(models.TextChoices):
+    RASCUNHO = "rascunho", "Rascunho"
+    AGUARDANDO_VALIDACAO = "aguardando_validacao", "Aguardando Validação"
     DEVOLVIDA = "devolvida", "Devolvida"
     VALIDADA = "validada", "Validada"
-    CONSOLIDADA = "consolidada", "Consolidada no DFD"
+    VINCULADA_DFD = "vinculada_dfd", "Vinculada ao DFD"
     CANCELADA = "cancelada", "Cancelada"
 
 

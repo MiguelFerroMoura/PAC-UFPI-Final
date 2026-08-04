@@ -7,6 +7,7 @@ sobre endpoints JSON.
 """
 
 from django.contrib.auth import authenticate, login, logout
+from django.db import transaction
 from django.db.models import Count, Sum
 from django.middleware.csrf import get_token
 from django.utils import timezone
@@ -17,12 +18,15 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.catalogo.models import ItemCatalogo
-from apps.demandas.models import Demanda, ItemDemanda, StatusDemanda
+from apps.demandas.constants import pode_transicionar_demanda, pode_transicionar_item
+from apps.demandas.models import Demanda, ItemDemanda, StatusDemanda, StatusItemDemanda
+from apps.demandas.services import sincronizar_status_macro_demanda
 from apps.dfd.models import DFD
 from apps.grupos_contratacao.models import GrupoContratacao
 from apps.unidades.models import Unidade
 from apps.validacoes.models import TipoAcao, Validacao
 
+from .permissions import IsAdminUserPermission
 from .serializers import (
     DemandaSerializer,
     DFDSerializer,
@@ -120,8 +124,7 @@ class DemandaViewSet(viewsets.ModelViewSet):
             .prefetch_related("itens")
         )
         user = self.request.user
-        # Usuário comum só enxerga as próprias demandas (RN de visibilidade).
-        if not user.is_staff and getattr(user, "perfil", "usuario") == "usuario":
+        if not user.is_admin_user:
             qs = qs.filter(usuario=user)
         return qs
 
@@ -138,7 +141,7 @@ class DemandaViewSet(viewsets.ModelViewSet):
 
     def _pode_editar(self, demanda):
         user = self.request.user
-        return user.is_staff or demanda.usuario_id == user.id
+        return user.is_admin_user or demanda.usuario_id == user.id
 
     def update(self, request, *args, **kwargs):
         demanda = self.get_object()
@@ -146,6 +149,11 @@ class DemandaViewSet(viewsets.ModelViewSet):
             return Response(
                 {"detail": "Você não tem permissão para editar esta demanda."},
                 status=status.HTTP_403_FORBIDDEN,
+            )
+        if demanda.status in [StatusDemanda.CONCLUIDA, StatusDemanda.CANCELADA]:
+            return Response(
+                {"detail": "Não é permitido alterar solicitações encerradas ou canceladas."},
+                status=status.HTTP_409_CONFLICT,
             )
         if demanda.status != StatusDemanda.RASCUNHO:
             return Response(
@@ -162,40 +170,89 @@ class DemandaViewSet(viewsets.ModelViewSet):
             serializer = ItemDemandaSerializer(demanda.itens.all(), many=True)
             return Response(serializer.data)
 
-        # POST — adiciona um item.
         if not self._pode_editar(demanda):
             return Response(
                 {"detail": "Você não tem permissão para adicionar itens."},
                 status=status.HTTP_403_FORBIDDEN,
+            )
+        if demanda.status in [StatusDemanda.CONCLUIDA, StatusDemanda.CANCELADA]:
+            return Response(
+                {"detail": "Não é permitido alterar solicitações encerradas ou canceladas."},
+                status=status.HTTP_409_CONFLICT,
             )
         if demanda.status != StatusDemanda.RASCUNHO:
             return Response(
                 {"detail": "Itens só podem ser adicionados em rascunho."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        serializer = ItemDemandaSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        serializer.save(demanda=demanda)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        with transaction.atomic():
+            demanda_locked = Demanda.objects.select_for_update().get(pk=demanda.pk)
+            serializer = ItemDemandaSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            serializer.save(demanda=demanda_locked)
+            sincronizar_status_macro_demanda(demanda_locked)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["post"])
     def enviar(self, request, pk=None):
-        demanda = self.get_object()
-        if not self._pode_editar(demanda):
-            return Response(
-                {"detail": "Você não tem permissão para enviar esta demanda."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-        if not demanda.itens.exists():
-            return Response(
-                {"detail": "Adicione pelo menos um item antes de enviar."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        demanda.status = StatusDemanda.AGUARDANDO_VALIDACAO
-        demanda.enviada_em = timezone.now()
-        demanda.save(update_fields=["status", "enviada_em", "atualizado_em"])
-        demanda.itens.update(status=StatusDemanda.AGUARDANDO_VALIDACAO)
-        return Response(DemandaSerializer(demanda).data)
+        with transaction.atomic():
+            demanda = Demanda.objects.select_for_update().get(pk=pk)
+            if not self._pode_editar(demanda):
+                return Response(
+                    {"detail": "Você não tem permissão para enviar esta demanda."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            if demanda.status in [StatusDemanda.CONCLUIDA, StatusDemanda.CANCELADA]:
+                return Response(
+                    {"detail": "Não é permitido alterar solicitações encerradas ou canceladas."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            if not demanda.itens.exists():
+                return Response(
+                    {"detail": "Adicione pelo menos um item antes de enviar."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if not pode_transicionar_demanda(demanda.status, StatusDemanda.AGUARDANDO_VALIDACAO):
+                return Response(
+                    {"detail": f"Transição inválida de {demanda.status} para {StatusDemanda.AGUARDANDO_VALIDACAO}."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            demanda.enviada_em = timezone.now()
+            demanda.save(update_fields=["enviada_em", "atualizado_em"])
+            demanda.itens.update(status=StatusItemDemanda.AGUARDANDO_VALIDACAO)
+            sincronizar_status_macro_demanda(demanda)
+            return Response(DemandaSerializer(demanda).data)
+
+    @action(detail=True, methods=["post"])
+    def cancelar(self, request, pk=None):
+        with transaction.atomic():
+            demanda = Demanda.objects.select_for_update().get(pk=pk)
+            user = request.user
+
+            # Regra conservadora: dono só cancela em rascunho; admin cancela em qualquer fase ativa
+            if not user.is_admin_user and demanda.usuario_id != user.id:
+                return Response(
+                    {"detail": "Você não tem permissão para cancelar esta demanda."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            if not user.is_admin_user and demanda.status != StatusDemanda.RASCUNHO:
+                return Response(
+                    {"detail": "Usuários comuns só podem cancelar solicitações em rascunho."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if demanda.status == StatusDemanda.CONCLUIDA:
+                return Response(
+                    {"detail": "Solicitações concluídas não podem ser canceladas."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            demanda.status = StatusDemanda.CANCELADA
+            demanda.save(update_fields=["status", "atualizado_em"])
+            demanda.itens.update(status=StatusItemDemanda.CANCELADA)
+            return Response(DemandaSerializer(demanda).data)
 
 
 class ItemDemandaViewSet(viewsets.ModelViewSet):
@@ -204,13 +261,13 @@ class ItemDemandaViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = ItemDemanda.objects.select_related("demanda", "demanda__usuario")
         user = self.request.user
-        if not user.is_staff and getattr(user, "perfil", "usuario") == "usuario":
+        if not user.is_admin_user:
             qs = qs.filter(demanda__usuario=user)
         return qs
 
     def _pode_editar(self, item):
         user = self.request.user
-        return user.is_staff or item.demanda.usuario_id == user.id
+        return user.is_admin_user or item.demanda.usuario_id == user.id
 
     def update(self, request, *args, **kwargs):
         item = self.get_object()
@@ -219,12 +276,67 @@ class ItemDemandaViewSet(viewsets.ModelViewSet):
                 {"detail": "Você não tem permissão para editar este item."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        if item.demanda.status != StatusDemanda.RASCUNHO:
+        if item.demanda.status in [StatusDemanda.CONCLUIDA, StatusDemanda.CANCELADA]:
             return Response(
-                {"detail": "Itens só podem ser editados enquanto em rascunho."},
+                {"detail": "Não é permitido alterar solicitações encerradas ou canceladas."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        if item.demanda.status != StatusDemanda.RASCUNHO and item.status != StatusItemDemanda.DEVOLVIDA:
+            return Response(
+                {"detail": "Itens só podem ser editados em rascunho ou devolvidos."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        return super().update(request, *args, **kwargs)
+        
+        with transaction.atomic():
+            response = super().update(request, *args, **kwargs)
+            demanda_locked = Demanda.objects.select_for_update().get(pk=item.demanda_id)
+            sincronizar_status_macro_demanda(demanda_locked)
+            return response
+
+    def destroy(self, request, *args, **kwargs):
+        item = self.get_object()
+        if not self._pode_editar(item):
+            return Response(
+                {"detail": "Você não tem permissão para excluir este item."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if item.demanda.status in [StatusDemanda.CONCLUIDA, StatusDemanda.CANCELADA]:
+            return Response(
+                {"detail": "Não é permitido alterar solicitações encerradas ou canceladas."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        with transaction.atomic():
+            demanda_locked = Demanda.objects.select_for_update().get(pk=item.demanda_id)
+            response = super().destroy(request, *args, **kwargs)
+            sincronizar_status_macro_demanda(demanda_locked)
+            return response
+
+    @action(detail=True, methods=["post"])
+    def reenviar(self, request, pk=None):
+        with transaction.atomic():
+            item = ItemDemanda.objects.select_for_update().get(pk=pk)
+            if not self._pode_editar(item):
+                return Response(
+                    {"detail": "Você não tem permissão para reenviar este item."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            if item.demanda.status in [StatusDemanda.CONCLUIDA, StatusDemanda.CANCELADA]:
+                return Response(
+                    {"detail": "Não é permitido alterar solicitações encerradas ou canceladas."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            if not pode_transicionar_item(item.status, StatusItemDemanda.AGUARDANDO_VALIDACAO):
+                return Response(
+                    {"detail": f"Somente itens devolvidos podem ser reenviados para validação."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            item.status = StatusItemDemanda.AGUARDANDO_VALIDACAO
+            item.save(update_fields=["status", "atualizado_em"])
+            demanda_locked = Demanda.objects.select_for_update().get(pk=item.demanda_id)
+            sincronizar_status_macro_demanda(demanda_locked)
+            return Response(ItemDemandaSerializer(item).data)
 
 
 # =============================================================================
@@ -234,65 +346,69 @@ class ItemDemandaViewSet(viewsets.ModelViewSet):
 class ValidacaoViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Validacao.objects.select_related("usuario", "item_demanda").all()
     serializer_class = ValidacaoSerializer
+    permission_classes = [IsAuthenticated, IsAdminUserPermission]
 
     @action(detail=False, methods=["get"])
     def pendentes(self, request):
-        """Itens aguardando validação (acesso restrito a administradores)."""
-        if not request.user.is_staff:
-            return Response(
-                {"detail": "Acesso restrito a administradores."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
         itens = ItemDemanda.objects.filter(
-            status=StatusDemanda.AGUARDANDO_VALIDACAO
+            status=StatusItemDemanda.AGUARDANDO_VALIDACAO
         ).select_related("demanda", "demanda__unidade", "demanda__usuario")
         return Response(ItemDemandaSerializer(itens, many=True).data)
 
     @action(detail=False, methods=["post"])
     def decidir(self, request):
-        """Valida ou devolve um item de demanda."""
-        if not request.user.is_staff:
-            return Response(
-                {"detail": "Acesso restrito a administradores."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
         item_id = request.data.get("item_demanda")
         acao = request.data.get("acao")
         comentario = request.data.get("comentario", "")
 
-        item = ItemDemanda.objects.filter(pk=item_id).first()
-        if item is None:
-            return Response(
-                {"detail": "Item não encontrado."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        if acao == TipoAcao.VALIDADO:
-            item.status = StatusDemanda.VALIDADA
-        elif acao == TipoAcao.DEVOLVIDO:
-            if not comentario:
+        with transaction.atomic():
+            item = ItemDemanda.objects.select_for_update().filter(pk=item_id).first()
+            if item is None:
                 return Response(
-                    {"detail": "Comentário é obrigatório para devolução."},
+                    {"detail": "Item não encontrado."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            demanda_locked = Demanda.objects.select_for_update().get(pk=item.demanda_id)
+            if demanda_locked.status in [StatusDemanda.CONCLUIDA, StatusDemanda.CANCELADA]:
+                return Response(
+                    {"detail": "Não é permitido alterar solicitações encerradas ou canceladas."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            if acao == TipoAcao.VALIDADO:
+                novo_status = StatusItemDemanda.VALIDADA
+            elif acao == TipoAcao.DEVOLVIDO:
+                if not comentario:
+                    return Response(
+                        {"detail": "Comentário é obrigatório para devolução."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                novo_status = StatusItemDemanda.DEVOLVIDA
+            else:
+                return Response(
+                    {"detail": "Ação inválida. Use 'validado' ou 'devolvido'."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            item.status = StatusDemanda.DEVOLVIDA
-        else:
-            return Response(
-                {"detail": "Ação inválida. Use 'validado' ou 'devolvido'."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
 
-        item.save(update_fields=["status", "atualizado_em"])
-        validacao = Validacao.objects.create(
-            item_demanda=item,
-            usuario=request.user,
-            acao=acao,
-            comentario=comentario,
-        )
-        return Response(
-            ValidacaoSerializer(validacao).data, status=status.HTTP_201_CREATED
-        )
+            if not pode_transicionar_item(item.status, novo_status):
+                return Response(
+                    {"detail": f"Transição de status inválida de {item.status} para {novo_status}."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            item.status = novo_status
+            item.save(update_fields=["status", "atualizado_em"])
+            validacao = Validacao.objects.create(
+                item_demanda=item,
+                usuario=request.user,
+                acao=acao,
+                comentario=comentario,
+            )
+            sincronizar_status_macro_demanda(demanda_locked)
+            return Response(
+                ValidacaoSerializer(validacao).data, status=status.HTTP_201_CREATED
+            )
 
 
 # =============================================================================
@@ -306,17 +422,12 @@ class DFDViewSet(viewsets.ModelViewSet):
         .all()
     )
     serializer_class = DFDSerializer
+    permission_classes = [IsAuthenticated, IsAdminUserPermission]
 
     @action(detail=False, methods=["get"])
     def disponiveis(self, request):
-        """Itens validados ainda não vinculados a nenhum DFD."""
-        if not request.user.is_staff:
-            return Response(
-                {"detail": "Acesso restrito a administradores."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
         itens = (
-            ItemDemanda.objects.filter(status=StatusDemanda.VALIDADA)
+            ItemDemanda.objects.filter(status=StatusItemDemanda.VALIDADA)
             .exclude(dfds__isnull=False)
             .select_related("demanda", "demanda__unidade")
         )
@@ -324,16 +435,10 @@ class DFDViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["post"])
     def consolidar(self, request):
-        """Cria um DFD a partir de itens validados selecionados."""
-        if not request.user.is_staff:
-            return Response(
-                {"detail": "Acesso restrito a administradores."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
         numero = request.data.get("numero")
         grupo_id = request.data.get("grupo")
-        item_ids = request.data.get("itens") or []
+        raw_item_ids = request.data.get("itens") or []
+        item_ids = list(dict.fromkeys(raw_item_ids))
 
         if not numero or not grupo_id or not item_ids:
             return Response(
@@ -341,20 +446,52 @@ class DFDViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        dfd = DFD.objects.create(
-            numero=numero,
-            grupo_id=grupo_id,
-            criado_por=request.user,
-            numero_processo=request.data.get("numero_processo", ""),
-            observacao=request.data.get("observacao", ""),
-        )
-        dfd.itens_demanda.set(item_ids)
-        ItemDemanda.objects.filter(id__in=item_ids).update(
-            status=StatusDemanda.CONSOLIDADA
-        )
-        return Response(
-            DFDSerializer(dfd).data, status=status.HTTP_201_CREATED
-        )
+        with transaction.atomic():
+            itens = list(ItemDemanda.objects.select_for_update().filter(id__in=item_ids))
+            if len(itens) != len(item_ids):
+                return Response(
+                    {"detail": "Um ou mais itens não foram encontrados."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Ordena e bloqueia deterministicamente as demandas afetadas por ID para evitar deadlock
+            demanda_ids = sorted(set(item.demanda_id for item in itens))
+            demandas_locked = list(
+                Demanda.objects.select_for_update().filter(id__in=demanda_ids).order_by("id")
+            )
+
+            for demanda in demandas_locked:
+                if demanda.status in [StatusDemanda.CONCLUIDA, StatusDemanda.CANCELADA]:
+                    return Response(
+                        {"detail": f"A solicitação #{demanda.id} está encerrada ou cancelada."},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+
+            for item in itens:
+                if not pode_transicionar_item(item.status, StatusItemDemanda.VINCULADA_DFD):
+                    return Response(
+                        {"detail": f"Item #{item.id} em status '{item.status}' não pode ser consolidado/vinculado."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+            dfd = DFD.objects.create(
+                numero=numero,
+                grupo_id=grupo_id,
+                criado_por=request.user,
+                numero_processo=request.data.get("numero_processo", ""),
+                observacao=request.data.get("observacao", ""),
+            )
+            dfd.itens_demanda.set(itens)
+            ItemDemanda.objects.filter(id__in=item_ids).update(
+                status=StatusItemDemanda.VINCULADA_DFD
+            )
+
+            for demanda in demandas_locked:
+                sincronizar_status_macro_demanda(demanda)
+
+            return Response(
+                DFDSerializer(dfd).data, status=status.HTTP_201_CREATED
+            )
 
 
 # =============================================================================
@@ -379,11 +516,11 @@ class DashboardStatsView(APIView):
                 "itens_por_status": por_status,
                 "valor_total_estimado": valor_total,
                 "aguardando_validacao": itens.filter(
-                    status=StatusDemanda.AGUARDANDO_VALIDACAO
+                    status=StatusItemDemanda.AGUARDANDO_VALIDACAO
                 ).count(),
-                "validados": itens.filter(status=StatusDemanda.VALIDADA).count(),
+                "validados": itens.filter(status=StatusItemDemanda.VALIDADA).count(),
                 "consolidados": itens.filter(
-                    status=StatusDemanda.CONSOLIDADA
+                    status=StatusItemDemanda.VINCULADA_DFD
                 ).count(),
                 "total_dfds": DFD.objects.count(),
             }

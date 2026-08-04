@@ -8,7 +8,7 @@ from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
 from apps.catalogo.models import ItemCatalogo
-from apps.demandas.models import Demanda, ItemDemanda, StatusDemanda
+from apps.demandas.models import Demanda, ItemDemanda, StatusDemanda, StatusItemDemanda
 from apps.dfd.models import DFD
 from apps.grupos_contratacao.models import GrupoContratacao
 from apps.unidades.models import Unidade
@@ -95,7 +95,7 @@ class ItemDemandaSerializer(serializers.ModelSerializer):
         validated_data["valor_total"] = (
             validated_data["quantidade"] * validated_data["valor_estimado"]
         )
-        validated_data["status"] = StatusDemanda.RASCUNHO
+        validated_data["status"] = StatusItemDemanda.RASCUNHO
         return super().create(validated_data)
 
     def update(self, instance, validated_data):

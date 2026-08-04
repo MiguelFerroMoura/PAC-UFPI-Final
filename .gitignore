@@ -12,6 +12,10 @@ dist/
 build/
 *.egg
 
+# Node.js
+node_modules/
+frontend/node_modules/
+
 # Virtual environment
 venv/
 .venv/
@@ -23,6 +27,8 @@ env/
 # Django
 db.sqlite3
 db.sqlite3-journal
+*.sqlite3*
+*.bak
 staticfiles/
 media/
 
