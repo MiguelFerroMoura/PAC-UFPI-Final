@@ -24,8 +24,8 @@ principal de cadastro, validação, devolução, consolidação e DFD.
 - [ ] USUÁRIO envia a demanda
 - [ ] ADMIN visualiza os itens pendentes
 - [ ] ADMIN valida ou devolve cada item
-- [ ] USUÁRIO visualiza o motivo da devolução
-- [ ] USUÁRIO corrige e reenvia o item
+- [x] USUÁRIO visualiza o motivo da devolução
+- [x] USUÁRIO corrige e reenvia o item
 - [ ] ADMIN consolida os itens validados
 - [ ] ADMIN vincula os itens a um DFD
 - [ ] USUÁRIO visualiza o número do DFD
@@ -58,12 +58,12 @@ principal de cadastro, validação, devolução, consolidação e DFD.
 
 ## Semana 2 — Fluxos principais
 
-- [ ] **P0 — Implementar reedição de item devolvido**
-  - [ ] Liberar edição somente para item devolvido
-  - [ ] Exibir comentário do ADMIN
-  - [ ] Implementar reenvio individual
-  - [ ] Retornar status para `AGUARDANDO_VALIDACAO`
-  - [ ] Preservar histórico das decisões
+- [x] **P0 — Implementar reedição de item devolvido**
+  - [x] Liberar edição somente para item devolvido
+  - [x] Exibir comentário do ADMIN
+  - [x] Implementar reenvio individual
+  - [x] Retornar status para `AGUARDANDO_VALIDACAO`
+  - [x] Preservar histórico das decisões
 
 - [ ] **P0 — Completar consolidação**
   - [ ] Filtrar somente itens validados e sem DFD
@@ -144,12 +144,12 @@ principal de cadastro, validação, devolução, consolidação e DFD.
   - [ ] Adicionar ação de devolver
   - [ ] Exibir mensagens de erro
 
-- [ ] **P0 — Interface do item devolvido**
-  - [ ] Exibir badge `DEVOLVIDO`
-  - [ ] Mostrar comentário do ADMIN
-  - [ ] Reabilitar botão de edição
-  - [ ] Mostrar botão de reenvio
-  - [ ] Exibir histórico básico
+- [~] **P0 — Interface do item devolvido**
+  - [x] Exibir badge `DEVOLVIDO`
+  - [x] Mostrar comentário do ADMIN
+  - [x] Reabilitar botão de edição
+  - [x] Mostrar botão de reenvio
+  - [~] Exibir histórico básico (parcial: última devolução exibida; histórico completo ainda não implementado)
 
 - [ ] **P1 — Interface da consolidação**
   - [ ] Tabela de itens agrupados
@@ -249,6 +249,32 @@ Registrar neste formato:
 - Em andamento:
 - Bloqueio:
 
+## 05/08/2026
+
+### Caio
+
+- Feito:
+  - Reedição e reenvio de item devolvido implementados na API e no frontend.
+  - Política de acesso por item aplicada: proprietário, ADMIN do grupo, ADMIN de outro grupo, ADMIN MASTER e item manual.
+  - `PATCH` de correção criado com campos permitidos/protegidos/desconhecidos, bloqueio de campos herdados em item catalogado e recálculo de `valor_total`.
+  - `PUT` de item bloqueado globalmente.
+  - Reenvio individual com transação, locks na ordem demanda → item, rollback em falha de sincronização macro e preservação dos registros de `Validacao`.
+  - Parecer de devolução usando `ultima_devolucao` como fonte principal e `justificativa_devolucao` apenas como fallback temporário.
+  - Testes backend e frontend adicionados para política de acesso, serializer, serviço, rollback, queries e interface.
+  - Commit validado: `543e1b983fdf7794b94704c6823a99ad231214c6`.
+- Validação:
+  - Backend específico: 22 testes OK.
+  - Backend completo: 80 testes OK.
+  - Frontend específico: 28 testes OK.
+  - Frontend completo: 77 testes OK.
+  - Build, lint, `check`, `makemigrations --check --dry-run` e `git diff --check` OK.
+  - Queries medidas: detail 1 item = 5; detail 10 itens = 5; list pequeno = 6; list maior = 6.
+- Em andamento:
+  - Histórico visual completo de devoluções ainda não foi implementado; a interface exibe a última devolução.
+- Bloqueio:
+  - SQLite não valida lock real por linha com `select_for_update`; semântica concorrente deve ser confirmada em banco com suporte a row locks.
+  - Fluxos legados/server-side de validação, consolidação e reenvio ainda têm pontos com ordem item → demanda e precisam de cobertura própria antes de refatoração ampla.
+
 ---
 
 # Critério de entrega
@@ -261,8 +287,8 @@ O MVP estará pronto quando o fluxo abaixo funcionar no ambiente publicado:
 - [ ] Salvamento como rascunho
 - [ ] Envio para validação
 - [ ] Validação individual
-- [ ] Devolução com justificativa
-- [ ] Correção e reenvio
+- [x] Devolução com justificativa
+- [x] Correção e reenvio
 - [ ] Consolidação
 - [ ] Vinculação de DFD
 - [ ] Visualização do DFD pelo solicitante
