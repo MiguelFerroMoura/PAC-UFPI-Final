@@ -233,5 +233,94 @@ describe("DemandaDetail", () => {
       resolveReenviar({ detail: "Sucesso" });
     });
   });
+  it("usa ultima_devolucao como fonte principal do parecer", async () => {
+    api.getDemanda.mockResolvedValue({
+      ...demandaDevolvida,
+      itens: [
+        {
+          ...demandaDevolvida.itens[0],
+          justificativa_devolucao: "Texto antigo de compatibilidade.",
+          ultima_devolucao: {
+            id: 99,
+            comentario: "Parecer novo selecionado por data e id.",
+            responsavel: { id: 5, nome: "Carlos Admin" },
+          },
+        },
+      ],
+    });
+
+    renderDetail();
+    expect(await screen.findByText("Demanda #7")).toBeInTheDocument();
+    expect(screen.getByText(/parecer novo selecionado por data e id/i)).toBeInTheDocument();
+    expect(screen.queryByText(/texto antigo de compatibilidade/i)).not.toBeInTheDocument();
+  });
+
+  it("item devolvido sem parecer nao exibe banner nem erro", async () => {
+    api.getDemanda.mockResolvedValue({
+      ...demandaDevolvida,
+      itens: [
+        {
+          ...demandaDevolvida.itens[0],
+          justificativa_devolucao: "",
+          ultima_devolucao: null,
+        },
+      ],
+    });
+
+    renderDetail();
+    expect(await screen.findByText("Demanda #7")).toBeInTheDocument();
+    expect(screen.queryByText(/parecer da devolu/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("exibe erro geral 404 no reenvio sem mostrar sucesso", async () => {
+    api.getDemanda.mockResolvedValue(demandaDevolvida);
+    api.reenviarItem.mockRejectedValue(new Error("Item nao encontrado."));
+
+    renderDetail();
+    expect(await screen.findByText("Demanda #7")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /reenviar/i }));
+
+    expect(await screen.findByText(/item nao encontrado/i)).toBeInTheDocument();
+    expect(screen.queryByText(/reenviado para valida/i)).not.toBeInTheDocument();
+  });
+
+  it("falha de rede no reenvio nao mostra sucesso", async () => {
+    api.getDemanda.mockResolvedValue(demandaDevolvida);
+    api.reenviarItem.mockRejectedValue(new Error("Falha de rede"));
+
+    renderDetail();
+    expect(await screen.findByText("Demanda #7")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /reenviar/i }));
+
+    expect(await screen.findByText(/falha de rede/i)).toBeInTheDocument();
+    expect(screen.queryByText(/item reenviado para valida/i)).not.toBeInTheDocument();
+  });
+
+  it("sucesso no reenvio atualiza item e status macro da demanda apos recarregar", async () => {
+    api.getDemanda
+      .mockResolvedValueOnce(demandaDevolvida)
+      .mockResolvedValueOnce({
+        ...demandaDevolvida,
+        status: "aguardando_validacao",
+        itens: [
+          { ...demandaDevolvida.itens[0], status: "aguardando_validacao" },
+          demandaDevolvida.itens[1],
+        ],
+      });
+    api.reenviarItem.mockResolvedValue({
+      detail: "Item reenviado para validação com sucesso.",
+      item: { id: 10, status: "aguardando_validacao" },
+      demanda: { id: 7, status: "aguardando_validacao" },
+    });
+
+    renderDetail();
+    expect(await screen.findByText("Demanda #7")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /reenviar/i }));
+
+    expect(await screen.findByText(/item reenviado para valida/i)).toBeInTheDocument();
+    await waitFor(() => expect(api.getDemanda).toHaveBeenCalledTimes(2));
+    expect(screen.getAllByText(/aguardando valida/i).length).toBeGreaterThanOrEqual(2);
+  });
 });
 

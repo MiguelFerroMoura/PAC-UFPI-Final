@@ -125,9 +125,9 @@ export default function DemandaDetail() {
                 <tr key={item.id}>
                   <td>
                     <div>{item.nome}</div>
-                    {item.status === "devolvida" && item.justificativa_devolucao && (
+                    {item.status === "devolvida" && (item.ultima_devolucao?.comentario || item.justificativa_devolucao) && (
                       <div className="alert alert-warning py-1 px-2 mt-1 mb-0 small" role="alert">
-                        <strong><i className="bi bi-exclamation-triangle me-1"></i>Parecer da Devolução:</strong> {item.justificativa_devolucao}
+                        <strong><i className="bi bi-exclamation-triangle me-1"></i>Parecer da Devolução:</strong> {item.ultima_devolucao?.comentario || item.justificativa_devolucao}
                         {item.ultima_devolucao?.responsavel?.nome && (
                           <span className="ms-2 text-muted">({item.ultima_devolucao.responsavel.nome})</span>
                         )}

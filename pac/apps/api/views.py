@@ -8,7 +8,7 @@ sobre endpoints JSON.
 
 from django.contrib.auth import authenticate, login, logout
 from django.db import transaction
-from django.db.models import Count, Sum
+from django.db.models import Count, Q, Sum
 from django.middleware.csrf import get_token
 from django.utils import timezone
 from rest_framework import status, viewsets
@@ -20,7 +20,13 @@ from rest_framework.views import APIView
 from apps.catalogo.models import ItemCatalogo
 from apps.demandas.constants import pode_transicionar_demanda, pode_transicionar_item
 from apps.demandas.models import Demanda, ItemDemanda, StatusDemanda, StatusItemDemanda
-from apps.demandas.services import sincronizar_status_macro_demanda
+from apps.demandas.services import (
+    ErroDominio,
+    OperacaoItemDemanda,
+    verificar_acesso_item_demanda,
+    reenviar_item_devolvido,
+    sincronizar_status_macro_demanda,
+)
 from apps.dfd.models import DFD
 from apps.grupos_contratacao.models import GrupoContratacao
 from apps.unidades.models import Unidade
@@ -32,11 +38,16 @@ from .serializers import (
     DFDSerializer,
     GrupoContratacaoSerializer,
     ItemCatalogoSerializer,
+    ItemDemandaCorrecaoSerializer,
     ItemDemandaSerializer,
     UnidadeSerializer,
     UsuarioSerializer,
     ValidacaoSerializer,
 )
+
+
+def erro_dominio_response(exc: ErroDominio):
+    return Response(exc.detail if isinstance(exc.detail, dict) else {"detail": exc.detail}, status=exc.status_code)
 
 
 # =============================================================================
@@ -104,11 +115,51 @@ class ItemCatalogoViewSet(viewsets.ModelViewSet):
     queryset = ItemCatalogo.objects.select_related("grupo").all()
     serializer_class = ItemCatalogoSerializer
 
+    def get_permissions(self):
+        if self.action in ["create", "update", "partial_update", "destroy", "ativar", "desativar"]:
+            return [IsAuthenticated(), IsAdminUserPermission()]
+        return [IsAuthenticated()]
+
     def get_queryset(self):
         qs = super().get_queryset()
-        if self.request.query_params.get("ativo") == "true":
+        user = self.request.user
+        termo = self.request.query_params.get("q") or self.request.query_params.get("search")
+        grupo = self.request.query_params.get("grupo")
+        ativo = self.request.query_params.get("ativo")
+
+        if termo:
+            qs = qs.filter(
+                Q(nome__icontains=termo)
+                | Q(codigo_catmat_catser__icontains=termo)
+            )
+        if grupo:
+            qs = qs.filter(grupo_id=grupo)
+
+        if getattr(user, "is_admin_user", False):
+            if ativo in ["true", "1", "sim"]:
+                qs = qs.filter(ativo=True)
+            elif ativo in ["false", "0", "nao"]:
+                qs = qs.filter(ativo=False)
+        else:
             qs = qs.filter(ativo=True)
+            if ativo in ["false", "0", "nao"]:
+                qs = qs.none()
+
         return qs
+
+    @action(detail=True, methods=["post"])
+    def ativar(self, request, pk=None):
+        item = self.get_object()
+        item.ativo = True
+        item.save(update_fields=["ativo", "atualizado_em"])
+        return Response(self.get_serializer(item).data)
+
+    @action(detail=True, methods=["post"])
+    def desativar(self, request, pk=None):
+        item = self.get_object()
+        item.ativo = False
+        item.save(update_fields=["ativo", "atualizado_em"])
+        return Response(self.get_serializer(item).data)
 
 
 # =============================================================================
@@ -278,7 +329,7 @@ class DemandaViewSet(viewsets.ModelViewSet):
             return Response(DemandaSerializer(demanda).data)
 
 
-class ItemDemandaViewSet(viewsets.ModelViewSet):
+class ItemDemandaViewSetLegacy(viewsets.ModelViewSet):
     serializer_class = ItemDemandaSerializer
 
     def get_queryset(self):
@@ -395,6 +446,141 @@ class ItemDemandaViewSet(viewsets.ModelViewSet):
 # =============================================================================
 # Validações
 # =============================================================================
+
+class ItemDemandaViewSet(viewsets.ModelViewSet):
+    serializer_class = ItemDemandaSerializer
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+
+    def get_serializer_class(self):
+        if self.action == "partial_update":
+            return ItemDemandaCorrecaoSerializer
+        return ItemDemandaSerializer
+
+    def get_queryset(self):
+        from django.db.models import Prefetch, Q
+        from apps.validacoes.models import Validacao, TipoAcao
+
+        ultima_devolucao_prefetch = Prefetch(
+            "validacoes",
+            queryset=Validacao.objects.filter(acao=TipoAcao.DEVOLVIDO)
+            .select_related("usuario")
+            .order_by("-criado_em", "-id"),
+            to_attr="devolucoes_prefetched",
+        )
+        qs = (
+            ItemDemanda.objects.select_related(
+                "demanda", "demanda__usuario", "item_catalogo__grupo__unidade_admin"
+            )
+            .prefetch_related(ultima_devolucao_prefetch)
+        )
+        user = self.request.user
+        if getattr(user, "is_admin_master_user", False):
+            return qs
+        if getattr(user, "is_admin_user", False):
+            return qs.filter(
+                Q(demanda__usuario=user)
+                | Q(item_catalogo__isnull=False, item_catalogo__grupo__unidade_admin_id=user.unidade_id)
+            )
+        return qs.filter(demanda__usuario=user)
+
+    def retrieve(self, request, *args, **kwargs):
+        item = self.get_object()
+        try:
+            verificar_acesso_item_demanda(
+                usuario=request.user,
+                item=item,
+                operacao=OperacaoItemDemanda.VISUALIZAR,
+            )
+        except ErroDominio as exc:
+            return erro_dominio_response(exc)
+        return Response(self.get_serializer(item).data)
+
+    def update(self, request, *args, **kwargs):
+        return Response(
+            {"detail": "Metodo PUT nao permitido para itens de demanda."},
+            status=status.HTTP_405_METHOD_NOT_ALLOWED,
+        )
+
+    def partial_update(self, request, *args, **kwargs):
+        item = self.get_object()
+        try:
+            verificar_acesso_item_demanda(
+                usuario=request.user,
+                item=item,
+                operacao=OperacaoItemDemanda.EDITAR,
+            )
+        except ErroDominio as exc:
+            return erro_dominio_response(exc)
+
+        if item.demanda.status in [StatusDemanda.CONCLUIDA, StatusDemanda.CANCELADA]:
+            return Response(
+                {"detail": "Nao e permitido alterar solicitacoes encerradas ou canceladas."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        if item.demanda.status != StatusDemanda.RASCUNHO and item.status != StatusItemDemanda.DEVOLVIDA:
+            return Response(
+                {"detail": "Itens so podem ser editados em rascunho ou devolvidos."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            demanda_locked = Demanda.objects.select_for_update().get(pk=item.demanda_id)
+            item_locked = (
+                ItemDemanda.objects.select_for_update()
+                .select_related("demanda", "item_catalogo__grupo__unidade_admin")
+                .get(pk=item.pk)
+            )
+            serializer = self.get_serializer(item_locked, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            sincronizar_status_macro_demanda(demanda_locked)
+            return Response(ItemDemandaSerializer(item_locked, context={"request": request}).data)
+
+    def destroy(self, request, *args, **kwargs):
+        item = self.get_object()
+        try:
+            verificar_acesso_item_demanda(
+                usuario=request.user,
+                item=item,
+                operacao=OperacaoItemDemanda.EDITAR,
+            )
+        except ErroDominio as exc:
+            return erro_dominio_response(exc)
+        if item.demanda.status in [StatusDemanda.CONCLUIDA, StatusDemanda.CANCELADA]:
+            return Response(
+                {"detail": "Nao e permitido alterar solicitacoes encerradas ou canceladas."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        with transaction.atomic():
+            demanda_locked = Demanda.objects.select_for_update().get(pk=item.demanda_id)
+            response = super().destroy(request, *args, **kwargs)
+            sincronizar_status_macro_demanda(demanda_locked)
+            return response
+
+    @action(detail=True, methods=["post"])
+    def reenviar(self, request, pk=None):
+        try:
+            item = reenviar_item_devolvido(item_id=pk, usuario=request.user)
+        except ErroDominio as exc:
+            return erro_dominio_response(exc)
+
+        demanda = item.demanda
+        demanda.refresh_from_db()
+        item.refresh_from_db()
+        return Response(
+            {
+                "detail": "Item reenviado para validacao com sucesso.",
+                "item": ItemDemandaSerializer(item, context={"request": request}).data,
+                "demanda": {
+                    "id": demanda.id,
+                    "status": demanda.status,
+                    "status_display": demanda.get_status_display(),
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
+
 
 class ValidacaoViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Validacao.objects.select_related("usuario", "item_demanda").all()

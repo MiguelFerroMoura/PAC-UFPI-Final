@@ -74,7 +74,7 @@ export const api = {
   addItem: (demandaId, body) =>
     request(`/demandas/${demandaId}/itens/`, { method: "POST", body }),
   getItem: (id) => request(`/itens/${id}/`),
-  updateItem: (id, body) => request(`/itens/${id}/`, { method: "PUT", body }),
+  updateItem: (id, body) => request(`/itens/${id}/`, { method: "PATCH", body }),
   reenviarItem: (id) => request(`/itens/${id}/reenviar/`, { method: "POST" }),
   enviarDemanda: (id) => request(`/demandas/${id}/enviar/`, { method: "POST" }),
 
