@@ -299,7 +299,6 @@ export function Link({ to, onClick, children, ...props }) {
 
 export function NavLink({ to, className, children, end, onClick, ...props }) {
   const { pathname } = useRouter();
-  const href = buildHref(to);
   const targetPath = normalizePathname(new URL(to, window.location.origin).pathname);
   const isActive = end ? pathname === targetPath : pathname === targetPath || pathname.startsWith(`${targetPath}/`);
 

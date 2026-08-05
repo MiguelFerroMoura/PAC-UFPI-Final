@@ -135,6 +135,62 @@ class ItemDemandaSerializer(serializers.ModelSerializer):
         return instance
 
 
+class ItemDemandaCorrecaoSerializer(serializers.ModelSerializer):
+    CAMPOS_MANUAIS = {
+        "tipo", "nome", "descricao", "unidade_medida", "quantidade",
+        "valor_estimado", "data_prevista", "prioridade",
+        "justificativa_prioridade", "justificativa_necessidade",
+        "indicacao_orcamentaria", "observacoes",
+    }
+    CAMPOS_CATALOGADOS = {
+        "quantidade", "valor_estimado", "data_prevista", "prioridade",
+        "justificativa_prioridade", "justificativa_necessidade",
+        "indicacao_orcamentaria", "observacoes",
+    }
+    CAMPOS_PROTEGIDOS = {
+        "demanda", "status", "valor_total", "criado_em", "atualizado_em",
+        "item_catalogo",
+    }
+    CAMPOS_HERDADOS_CATALOGO = {"tipo", "nome", "descricao", "unidade_medida", "item_catalogo"}
+
+    class Meta:
+        model = ItemDemanda
+        fields = [
+            "tipo", "nome", "descricao", "unidade_medida", "quantidade",
+            "valor_estimado", "data_prevista", "prioridade",
+            "justificativa_prioridade", "justificativa_necessidade",
+            "indicacao_orcamentaria", "observacoes",
+        ]
+
+    def validate(self, attrs):
+        raw_keys = set(getattr(self, "initial_data", {}).keys())
+        allowed = self.CAMPOS_CATALOGADOS if self.instance and self.instance.item_catalogo_id else self.CAMPOS_MANUAIS
+        errors = {}
+
+        for campo in sorted(raw_keys & self.CAMPOS_PROTEGIDOS):
+            errors[campo] = ["Campo protegido."]
+
+        for campo in sorted(raw_keys - self.CAMPOS_MANUAIS - self.CAMPOS_PROTEGIDOS):
+            errors[campo] = ["Campo desconhecido."]
+
+        if self.instance and self.instance.item_catalogo_id:
+            for campo in sorted(raw_keys & self.CAMPOS_HERDADOS_CATALOGO):
+                errors[campo] = ["Campo herdado do catalogo nao pode ser alterado."]
+
+        for campo in sorted(raw_keys - allowed - self.CAMPOS_PROTEGIDOS):
+            errors.setdefault(campo, ["Campo nao permitido."])
+
+        if errors:
+            raise serializers.ValidationError(errors)
+        return attrs
+
+    def update(self, instance, validated_data):
+        instance = super().update(instance, validated_data)
+        instance.valor_total = instance.quantidade * instance.valor_estimado
+        instance.save(update_fields=["valor_total", "atualizado_em"])
+        return instance
+
+
 class DemandaSerializer(serializers.ModelSerializer):
     itens = ItemDemandaSerializer(many=True, read_only=True)
     unidade_sigla = serializers.CharField(source="unidade.sigla", read_only=True)

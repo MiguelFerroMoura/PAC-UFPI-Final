@@ -511,14 +511,14 @@ class SincronizacaoMacroTests(APITestCase):
         status_calc = sincronizar_status_macro_demanda(self.demanda)
         self.assertEqual(status_calc, StatusDemanda.CONCLUIDA)
 
-    def test_todos_itens_cancelados_eh_cancelada(self):
+    def test_todos_itens_cancelados_preserva_status_macro_anterior(self):
         ItemDemanda.objects.create(
             demanda=self.demanda, tipo="material", nome="A", quantidade=1,
             valor_estimado=Decimal("10"), valor_total=Decimal("10"),
             data_prevista=date(2027, 1, 1), status=StatusItemDemanda.CANCELADA,
         )
         status_calc = sincronizar_status_macro_demanda(self.demanda)
-        self.assertEqual(status_calc, StatusDemanda.CANCELADA)
+        self.assertEqual(status_calc, StatusDemanda.RASCUNHO)
 
     def test_cancelados_com_ativos_ignora_cancelados(self):
         ItemDemanda.objects.create(
@@ -584,7 +584,7 @@ class SincronizacaoMacroTests(APITestCase):
             {"status": StatusItemDemanda.VALIDADA},
             format="json",
         )
-        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
         item.refresh_from_db()
         self.assertEqual(item.status, StatusItemDemanda.RASCUNHO)
 
@@ -741,7 +741,7 @@ class ItemDevolvidoCorrecaoTests(APITestCase):
         from apps.validacoes.models import Validacao
         validacoes_antes = Validacao.objects.filter(item_demanda=self.item).count()
         self.client.force_login(self.user)
-        resp = self.client.put(
+        resp = self.client.patch(
             reverse("api:item-detail", kwargs={"pk": self.item.pk}),
             {
                 "tipo": "material", "nome": "Impressora Laser", "descricao": "Multifuncional",
@@ -779,7 +779,7 @@ class ItemDevolvidoCorrecaoTests(APITestCase):
         self.client.force_login(self.user)
         resp = self.client.post(reverse("api:item-reenviar", kwargs={"pk": self.item.pk}))
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertEqual(resp.data["detail"], "Item reenviado para validação com sucesso.")
+        self.assertEqual(resp.data["detail"], "Item reenviado para validacao com sucesso.")
         self.item.refresh_from_db()
         self.assertEqual(self.item.status, StatusItemDemanda.AGUARDANDO_VALIDACAO)
         self.demanda.refresh_from_db()
@@ -844,18 +844,18 @@ class ItemDevolvidoCorrecaoTests(APITestCase):
         self.assertEqual(edit_resp.status_code, status.HTTP_404_NOT_FOUND)
 
         resend_resp = self.client.post(reverse("api:item-reenviar", kwargs={"pk": self.item.pk}))
-        self.assertEqual(resend_resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(resend_resp.status_code, status.HTTP_404_NOT_FOUND)
 
-    def test_admin_visualiza_mas_nao_edita_item(self):
+    def test_admin_comum_nao_visualiza_item_manual(self):
         self.client.force_login(self.admin)
         get_resp = self.client.get(reverse("api:item-detail", kwargs={"pk": self.item.pk}))
-        self.assertEqual(get_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(get_resp.status_code, status.HTTP_404_NOT_FOUND)
 
         edit_resp = self.client.patch(
             reverse("api:item-detail", kwargs={"pk": self.item.pk}),
             {"nome": "Admin Edit"}, format="json",
         )
-        self.assertEqual(edit_resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(edit_resp.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_segundo_reenvio_do_mesmo_item_eh_rejeitado(self):
         from apps.validacoes.models import Validacao
@@ -947,3 +947,524 @@ class CatalogoDashboardTests(APITestCase):
         self.client.force_login(self.user)
         resp = self.client.get(reverse("api:dashboard-stats"))
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+
+class ItemDevolvidoRedPoliticaAcessoTests(APITestCase):
+    def setUp(self):
+        self.unidade_solicitante = criar_unidade("SOL")
+        self.unidade_admin = criar_unidade("ADM")
+        self.unidade_outro_admin = criar_unidade("OUT")
+        self.proprietario = criar_usuario("proprietario", unidade=self.unidade_solicitante)
+        self.outro_solicitante = criar_usuario("outro_solic", unidade=self.unidade_solicitante)
+        self.admin_grupo = criar_usuario(
+            "admin_grupo", unidade=self.unidade_admin, is_staff=True, perfil="admin"
+        )
+        self.admin_outro_grupo = criar_usuario(
+            "admin_outro", unidade=self.unidade_outro_admin, is_staff=True, perfil="admin"
+        )
+        self.admin_master = criar_usuario(
+            "admin_master", unidade=self.unidade_outro_admin, is_staff=True, perfil="admin_master"
+        )
+        self.grupo = GrupoContratacao.objects.create(
+            nome="TIC", unidade_admin=self.unidade_admin
+        )
+        self.catalogo = ItemCatalogo.objects.create(
+            tipo="material", nome="Notebook catalogado", descricao="Cat",
+            grupo=self.grupo, unidade_medida="un", valor_estimado=Decimal("1000")
+        )
+        self.demanda = Demanda.objects.create(
+            unidade=self.unidade_solicitante, usuario=self.proprietario,
+            ano_referencia=2027, status=StatusDemanda.EM_ANDAMENTO
+        )
+        self.item_catalogado = ItemDemanda.objects.create(
+            demanda=self.demanda, item_catalogo=self.catalogo, tipo="material",
+            nome="Notebook catalogado", descricao="Cat", unidade_medida="un",
+            quantidade=1, valor_estimado=Decimal("1000"), valor_total=Decimal("1000"),
+            data_prevista=date(2027, 1, 1), prioridade="media",
+            justificativa_prioridade="a", justificativa_necessidade="b",
+            indicacao_orcamentaria="c", status=StatusItemDemanda.DEVOLVIDA,
+        )
+        self.item_manual = ItemDemanda.objects.create(
+            demanda=self.demanda, tipo="material", nome="Item manual",
+            descricao="Manual", unidade_medida="un", quantidade=1,
+            valor_estimado=Decimal("500"), valor_total=Decimal("500"),
+            data_prevista=date(2027, 1, 1), prioridade="media",
+            justificativa_prioridade="a", justificativa_necessidade="b",
+            indicacao_orcamentaria="c", status=StatusItemDemanda.DEVOLVIDA,
+        )
+
+    def test_politica_de_acesso_por_operacao_e_grupo_real(self):
+        from apps.demandas.services import (
+            OperacaoItemDemanda,
+            OperacaoNaoPermitida,
+            ItemNaoEncontrado,
+            verificar_acesso_item_demanda,
+        )
+
+        casos = [
+            (self.proprietario, self.item_catalogado, OperacaoItemDemanda.VISUALIZAR, None),
+            (self.proprietario, self.item_catalogado, OperacaoItemDemanda.EDITAR, None),
+            (self.proprietario, self.item_catalogado, OperacaoItemDemanda.REENVIAR, None),
+            (self.outro_solicitante, self.item_catalogado, OperacaoItemDemanda.VISUALIZAR, ItemNaoEncontrado),
+            (self.admin_grupo, self.item_catalogado, OperacaoItemDemanda.VISUALIZAR, None),
+            (self.admin_grupo, self.item_catalogado, OperacaoItemDemanda.EDITAR, OperacaoNaoPermitida),
+            (self.admin_grupo, self.item_catalogado, OperacaoItemDemanda.REENVIAR, OperacaoNaoPermitida),
+            (self.admin_outro_grupo, self.item_catalogado, OperacaoItemDemanda.VISUALIZAR, ItemNaoEncontrado),
+            (self.admin_master, self.item_catalogado, OperacaoItemDemanda.VISUALIZAR, None),
+            (self.admin_master, self.item_catalogado, OperacaoItemDemanda.REENVIAR, OperacaoNaoPermitida),
+            (self.admin_grupo, self.item_manual, OperacaoItemDemanda.VISUALIZAR, ItemNaoEncontrado),
+            (self.admin_master, self.item_manual, OperacaoItemDemanda.VISUALIZAR, None),
+        ]
+
+        for usuario, item, operacao, erro in casos:
+            with self.subTest(usuario=usuario.username, item=item.nome, operacao=operacao):
+                if erro is None:
+                    verificar_acesso_item_demanda(usuario=usuario, item=item, operacao=operacao)
+                else:
+                    with self.assertRaises(erro):
+                        verificar_acesso_item_demanda(usuario=usuario, item=item, operacao=operacao)
+
+    def test_api_admin_comum_nao_visualiza_item_manual(self):
+        self.client.force_login(self.admin_grupo)
+        resp = self.client.get(reverse("api:item-detail", kwargs={"pk": self.item_manual.pk}))
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_api_admin_do_grupo_visualiza_mas_nao_corrige_nem_reenvia(self):
+        self.client.force_login(self.admin_grupo)
+        self.assertEqual(
+            self.client.get(reverse("api:item-detail", kwargs={"pk": self.item_catalogado.pk})).status_code,
+            status.HTTP_200_OK,
+        )
+        patch_resp = self.client.patch(
+            reverse("api:item-detail", kwargs={"pk": self.item_catalogado.pk}),
+            {"observacoes": "tentativa admin"}, format="json",
+        )
+        self.assertEqual(patch_resp.status_code, status.HTTP_403_FORBIDDEN)
+        reenviar_resp = self.client.post(reverse("api:item-reenviar", kwargs={"pk": self.item_catalogado.pk}))
+        self.assertEqual(reenviar_resp.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_api_admin_de_outro_grupo_recebe_404(self):
+        self.client.force_login(self.admin_outro_grupo)
+        self.assertEqual(
+            self.client.get(reverse("api:item-detail", kwargs={"pk": self.item_catalogado.pk})).status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+        self.assertEqual(
+            self.client.post(reverse("api:item-reenviar", kwargs={"pk": self.item_catalogado.pk})).status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+
+    def test_api_proprietario_consegue_reenviar_item_devolvido_valido(self):
+        self.client.force_login(self.proprietario)
+        resp = self.client.post(reverse("api:item-reenviar", kwargs={"pk": self.item_catalogado.pk}))
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.item_catalogado.refresh_from_db()
+        self.assertEqual(self.item_catalogado.status, StatusItemDemanda.AGUARDANDO_VALIDACAO)
+
+    def test_api_outro_solicitante_recebe_404_ao_visualizar_editar_e_reenviar(self):
+        self.client.force_login(self.outro_solicitante)
+        detail_url = reverse("api:item-detail", kwargs={"pk": self.item_catalogado.pk})
+        reenviar_url = reverse("api:item-reenviar", kwargs={"pk": self.item_catalogado.pk})
+        self.assertEqual(self.client.get(detail_url).status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(
+            self.client.patch(detail_url, {"observacoes": "x"}, format="json").status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+        self.assertEqual(self.client.post(reenviar_url).status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_api_admin_master_visualiza_mas_nao_edita_nem_reenvia(self):
+        self.client.force_login(self.admin_master)
+        detail_url = reverse("api:item-detail", kwargs={"pk": self.item_catalogado.pk})
+        reenviar_url = reverse("api:item-reenviar", kwargs={"pk": self.item_catalogado.pk})
+        self.assertEqual(self.client.get(detail_url).status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            self.client.patch(detail_url, {"observacoes": "admin master"}, format="json").status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+        self.assertEqual(self.client.post(reenviar_url).status_code, status.HTTP_403_FORBIDDEN)
+
+
+class ItemDevolvidoRedServicoSerializerTests(APITestCase):
+    def setUp(self):
+        self.unidade = criar_unidade("RED")
+        self.user = criar_usuario("red_user", unidade=self.unidade)
+        self.admin = criar_usuario("red_admin", unidade=self.unidade, is_staff=True, perfil="admin")
+        self.demanda = Demanda.objects.create(
+            unidade=self.unidade, usuario=self.user, ano_referencia=2027,
+            status=StatusDemanda.EM_ANDAMENTO
+        )
+        self.item = ItemDemanda.objects.create(
+            demanda=self.demanda, tipo="material", nome="Item devolvido",
+            descricao="Desc", unidade_medida="un", quantidade=2,
+            valor_estimado=Decimal("50"), valor_total=Decimal("100"),
+            data_prevista=date(2027, 1, 1), prioridade="media",
+            justificativa_prioridade="a", justificativa_necessidade="b",
+            indicacao_orcamentaria="c", status=StatusItemDemanda.DEVOLVIDA,
+        )
+
+    def snapshot_validacoes(self):
+        from apps.validacoes.models import Validacao
+
+        return list(
+            Validacao.objects.filter(item_demanda=self.item)
+            .order_by("id")
+            .values("id", "item_demanda_id", "usuario_id", "acao", "comentario", "criado_em")
+        )
+
+    def test_reenviar_item_devolvido_servico_sucesso_e_repeticao(self):
+        from apps.validacoes.models import Validacao
+        from apps.demandas.services import TransicaoInvalida, reenviar_item_devolvido
+
+        item = reenviar_item_devolvido(item_id=self.item.pk, usuario=self.user)
+        self.assertEqual(item.status, StatusItemDemanda.AGUARDANDO_VALIDACAO)
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.status, StatusItemDemanda.AGUARDANDO_VALIDACAO)
+        self.demanda.refresh_from_db()
+        self.assertEqual(self.demanda.status, StatusDemanda.AGUARDANDO_VALIDACAO)
+        validacoes_antes = list(Validacao.objects.filter(item_demanda=self.item).values())
+
+        with self.assertRaises(TransicaoInvalida):
+            reenviar_item_devolvido(item_id=self.item.pk, usuario=self.user)
+        self.item.refresh_from_db()
+        self.demanda.refresh_from_db()
+        self.assertEqual(self.item.status, StatusItemDemanda.AGUARDANDO_VALIDACAO)
+        self.assertEqual(self.demanda.status, StatusDemanda.AGUARDANDO_VALIDACAO)
+        self.assertEqual(list(Validacao.objects.filter(item_demanda=self.item).values()), validacoes_antes)
+
+    def test_reenviar_item_devolvido_servico_rollback_falha_sincronizacao(self):
+        from apps.validacoes.models import Validacao, TipoAcao
+        from apps.demandas.services import reenviar_item_devolvido
+
+        validacao = Validacao.objects.create(
+            item_demanda=self.item, usuario=self.admin,
+            acao=TipoAcao.DEVOLVIDO, comentario="Corrigir"
+        )
+        item_atualizado_em = self.item.atualizado_em
+        demanda_status = self.demanda.status
+        demanda_atualizado_em = self.demanda.atualizado_em
+        validacoes_antes = self.snapshot_validacoes()
+
+        with mock.patch(
+            "apps.demandas.services.sincronizar_status_macro_demanda",
+            side_effect=RuntimeError("falha macro"),
+        ):
+            with self.assertRaises(RuntimeError):
+                reenviar_item_devolvido(item_id=self.item.pk, usuario=self.user)
+
+        self.item.refresh_from_db()
+        self.demanda.refresh_from_db()
+        validacao.refresh_from_db()
+        self.assertEqual(self.item.status, StatusItemDemanda.DEVOLVIDA)
+        self.assertEqual(self.item.atualizado_em, item_atualizado_em)
+        self.assertEqual(self.demanda.status, demanda_status)
+        self.assertEqual(self.demanda.atualizado_em, demanda_atualizado_em)
+        self.assertEqual(validacao.comentario, "Corrigir")
+        self.assertEqual(self.snapshot_validacoes(), validacoes_antes)
+
+    def test_reenviar_api_demanda_concluida_e_cancelada_retorna_409(self):
+        self.client.force_login(self.user)
+        for demanda_status in [StatusDemanda.CONCLUIDA, StatusDemanda.CANCELADA]:
+            with self.subTest(demanda_status=demanda_status):
+                self.demanda.status = demanda_status
+                self.demanda.save(update_fields=["status"])
+                self.item.status = StatusItemDemanda.DEVOLVIDA
+                self.item.save(update_fields=["status"])
+                resp = self.client.post(reverse("api:item-reenviar", kwargs={"pk": self.item.pk}))
+                self.assertEqual(resp.status_code, status.HTTP_409_CONFLICT)
+
+    def test_reenviar_api_item_status_incompativel_retorna_400(self):
+        self.item.status = StatusItemDemanda.VALIDADA
+        self.item.save(update_fields=["status"])
+        self.client.force_login(self.user)
+        resp = self.client.post(reverse("api:item-reenviar", kwargs={"pk": self.item.pk}))
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_reenviar_api_item_incompleto_retorna_erros_estruturados_por_campo(self):
+        self.item.nome = ""
+        self.item.quantidade = 0
+        self.item.valor_estimado = Decimal("0")
+        self.item.justificativa_necessidade = ""
+        self.item.save()
+        self.client.force_login(self.user)
+        resp = self.client.post(reverse("api:item-reenviar", kwargs={"pk": self.item.pk}))
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("nome", resp.data)
+        self.assertIn("quantidade", resp.data)
+        self.assertIn("valor_estimado", resp.data)
+        self.assertIn("justificativa_necessidade", resp.data)
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.status, StatusItemDemanda.DEVOLVIDA)
+
+    def test_patch_serializer_rejeita_campos_protegidos_desconhecidos_e_recalcula_total(self):
+        self.client.force_login(self.user)
+        protected_resp = self.client.patch(
+            reverse("api:item-detail", kwargs={"pk": self.item.pk}),
+            {"status": StatusItemDemanda.VALIDADA}, format="json",
+        )
+        self.assertEqual(protected_resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+        unknown_resp = self.client.patch(
+            reverse("api:item-detail", kwargs={"pk": self.item.pk}),
+            {"campo_inexistente": "x"}, format="json",
+        )
+        self.assertEqual(unknown_resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+        ok_resp = self.client.patch(
+            reverse("api:item-detail", kwargs={"pk": self.item.pk}),
+            {"quantidade": 3, "valor_estimado": "70.00"}, format="json",
+        )
+        self.assertEqual(ok_resp.status_code, status.HTTP_200_OK)
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.valor_total, Decimal("210.00"))
+
+    def test_patch_item_manual_permite_campos_manuais(self):
+        self.client.force_login(self.user)
+        resp = self.client.patch(
+            reverse("api:item-detail", kwargs={"pk": self.item.pk}),
+            {
+                "tipo": "servico",
+                "nome": "Servico manual corrigido",
+                "descricao": "Descricao corrigida",
+                "unidade_medida": "mes",
+            },
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.tipo, "servico")
+        self.assertEqual(self.item.nome, "Servico manual corrigido")
+        self.assertEqual(self.item.descricao, "Descricao corrigida")
+        self.assertEqual(self.item.unidade_medida, "mes")
+
+    def test_patch_item_catalogado_bloqueia_campos_herdados(self):
+        unidade_admin = criar_unidade("CATADM")
+        grupo = GrupoContratacao.objects.create(nome="CAT", unidade_admin=unidade_admin)
+        catalogo = ItemCatalogo.objects.create(
+            tipo="material", nome="Catalogado", descricao="Catalogado",
+            grupo=grupo, unidade_medida="un", valor_estimado=Decimal("30")
+        )
+        item_catalogado = ItemDemanda.objects.create(
+            demanda=self.demanda, item_catalogo=catalogo, tipo="material",
+            nome="Catalogado", descricao="Catalogado", unidade_medida="un",
+            quantidade=1, valor_estimado=Decimal("30"), valor_total=Decimal("30"),
+            data_prevista=date(2027, 1, 1), prioridade="media",
+            justificativa_prioridade="a", justificativa_necessidade="b",
+            indicacao_orcamentaria="c", status=StatusItemDemanda.DEVOLVIDA,
+        )
+        self.client.force_login(self.user)
+        for campo, valor in {
+            "tipo": "servico",
+            "nome": "Outro nome",
+            "descricao": "Outra descricao",
+            "unidade_medida": "mes",
+            "item_catalogo": None,
+        }.items():
+            with self.subTest(campo=campo):
+                resp = self.client.patch(
+                    reverse("api:item-detail", kwargs={"pk": item_catalogado.pk}),
+                    {campo: valor}, format="json",
+                )
+                self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_put_item_demanda_retorna_405_para_todo_status(self):
+        self.client.force_login(self.user)
+        for item_status in [
+            StatusItemDemanda.RASCUNHO,
+            StatusItemDemanda.DEVOLVIDA,
+            StatusItemDemanda.AGUARDANDO_VALIDACAO,
+        ]:
+            with self.subTest(item_status=item_status):
+                self.item.status = item_status
+                self.item.save(update_fields=["status"])
+                resp = self.client.put(
+                    reverse("api:item-detail", kwargs={"pk": self.item.pk}),
+                    dados_item(nome="PUT rejeitado"), format="json",
+                )
+                self.assertEqual(resp.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+
+
+class SincronizacaoMacroRedMatrizTests(APITestCase):
+    def setUp(self):
+        self.unidade = criar_unidade("MAT")
+        self.user = criar_usuario("mat_user", unidade=self.unidade)
+
+    def criar_demanda(self, demanda_status=StatusDemanda.EM_ANDAMENTO, itens=None):
+        demanda = Demanda.objects.create(
+            unidade=self.unidade, usuario=self.user, ano_referencia=2027,
+            status=demanda_status
+        )
+        for idx, item_status in enumerate(itens or []):
+            ItemDemanda.objects.create(
+                demanda=demanda, tipo="material", nome=f"Item {idx}",
+                descricao="d", unidade_medida="un", quantidade=1,
+                valor_estimado=Decimal("10"), valor_total=Decimal("10"),
+                data_prevista=date(2027, 1, 1), prioridade="media",
+                justificativa_prioridade="a", justificativa_necessidade="b",
+                indicacao_orcamentaria="c", status=item_status,
+            )
+        return demanda
+
+    def test_matriz_macro_com_cancelados_e_terminais(self):
+        casos = [
+            ("sem_itens", StatusDemanda.EM_ANDAMENTO, [], StatusDemanda.RASCUNHO),
+            ("todos_cancelados_preserva", StatusDemanda.EM_ANDAMENTO, [StatusItemDemanda.CANCELADA], StatusDemanda.EM_ANDAMENTO),
+            ("cancelado_rascunho", StatusDemanda.EM_ANDAMENTO, [StatusItemDemanda.CANCELADA, StatusItemDemanda.RASCUNHO], StatusDemanda.RASCUNHO),
+            ("cancelado_aguardando", StatusDemanda.EM_ANDAMENTO, [StatusItemDemanda.CANCELADA, StatusItemDemanda.AGUARDANDO_VALIDACAO], StatusDemanda.AGUARDANDO_VALIDACAO),
+            ("todos_devolvidos", StatusDemanda.EM_ANDAMENTO, [StatusItemDemanda.DEVOLVIDA, StatusItemDemanda.DEVOLVIDA], StatusDemanda.EM_ANDAMENTO),
+            ("todos_validados", StatusDemanda.AGUARDANDO_VALIDACAO, [StatusItemDemanda.VALIDADA], StatusDemanda.EM_ANDAMENTO),
+            ("todos_vinculados", StatusDemanda.EM_ANDAMENTO, [StatusItemDemanda.VINCULADA_DFD], StatusDemanda.CONCLUIDA),
+            ("aguardando_validado", StatusDemanda.AGUARDANDO_VALIDACAO, [StatusItemDemanda.AGUARDANDO_VALIDACAO, StatusItemDemanda.VALIDADA], StatusDemanda.EM_ANDAMENTO),
+            ("validado_vinculado", StatusDemanda.EM_ANDAMENTO, [StatusItemDemanda.VALIDADA, StatusItemDemanda.VINCULADA_DFD], StatusDemanda.EM_ANDAMENTO),
+            ("devolvido_vinculado", StatusDemanda.EM_ANDAMENTO, [StatusItemDemanda.DEVOLVIDA, StatusItemDemanda.VINCULADA_DFD], StatusDemanda.EM_ANDAMENTO),
+            ("terminal_concluida", StatusDemanda.CONCLUIDA, [StatusItemDemanda.RASCUNHO], StatusDemanda.CONCLUIDA),
+            ("terminal_cancelada", StatusDemanda.CANCELADA, [StatusItemDemanda.VINCULADA_DFD], StatusDemanda.CANCELADA),
+        ]
+        for nome, demanda_status, itens, esperado in casos:
+            with self.subTest(nome=nome):
+                demanda = self.criar_demanda(demanda_status, itens)
+                aplicado = sincronizar_status_macro_demanda(demanda)
+                demanda.refresh_from_db()
+                self.assertEqual(aplicado, esperado)
+                self.assertEqual(demanda.status, esperado)
+
+
+class ParecerQueriesRedTests(APITestCase):
+    def setUp(self):
+        self.unidade = criar_unidade("QRY")
+        self.user = criar_usuario("qry_user", unidade=self.unidade)
+        self.admin = criar_usuario("qry_admin", unidade=self.unidade, is_staff=True, perfil="admin")
+
+    def criar_demanda_com_devolucoes(self, quantidade):
+        from apps.validacoes.models import Validacao, TipoAcao
+
+        demanda = Demanda.objects.create(
+            unidade=self.unidade, usuario=self.user, ano_referencia=2027,
+            status=StatusDemanda.EM_ANDAMENTO
+        )
+        for idx in range(quantidade):
+            item = ItemDemanda.objects.create(
+                demanda=demanda, tipo="material", nome=f"Item {idx}",
+                descricao="d", unidade_medida="un", quantidade=1,
+                valor_estimado=Decimal("10"), valor_total=Decimal("10"),
+                data_prevista=date(2027, 1, 1), prioridade="media",
+                justificativa_prioridade="a", justificativa_necessidade="b",
+                indicacao_orcamentaria="c", status=StatusItemDemanda.DEVOLVIDA,
+            )
+            Validacao.objects.create(
+                item_demanda=item, usuario=self.admin,
+                acao=TipoAcao.VALIDADO, comentario="Aprovacao ignorada"
+            )
+            Validacao.objects.create(
+                item_demanda=item, usuario=self.admin,
+                acao=TipoAcao.DEVOLVIDO, comentario=f"Devolucao {idx}"
+            )
+        return demanda
+
+    def test_ultima_devolucao_usa_acao_devolvido_ordenada_por_criado_em_e_id(self):
+        from datetime import timezone as dt_timezone
+        from apps.validacoes.models import Validacao, TipoAcao
+
+        demanda = self.criar_demanda_com_devolucoes(0)
+        item = ItemDemanda.objects.create(
+            demanda=demanda, tipo="material", nome="Item parecer",
+            descricao="d", unidade_medida="un", quantidade=1,
+            valor_estimado=Decimal("10"), valor_total=Decimal("10"),
+            data_prevista=date(2027, 1, 1), prioridade="media",
+            justificativa_prioridade="a", justificativa_necessidade="b",
+            indicacao_orcamentaria="c", status=StatusItemDemanda.DEVOLVIDA,
+        )
+        from datetime import datetime
+        momento_antigo = datetime(2026, 1, 1, 12, 0, tzinfo=dt_timezone.utc)
+        momento_novo = datetime(2026, 1, 2, 12, 0, tzinfo=dt_timezone.utc)
+        antigo = Validacao.objects.create(
+            item_demanda=item, usuario=self.admin, acao=TipoAcao.DEVOLVIDO,
+            comentario="Devolucao antiga"
+        )
+        novo_id_menor = Validacao.objects.create(
+            item_demanda=item, usuario=self.admin, acao=TipoAcao.DEVOLVIDO,
+            comentario="Devolucao nova id menor"
+        )
+        novo_id_maior = Validacao.objects.create(
+            item_demanda=item, usuario=self.admin, acao=TipoAcao.DEVOLVIDO,
+            comentario="Devolucao nova id maior"
+        )
+        Validacao.objects.filter(pk=antigo.pk).update(criado_em=momento_antigo)
+        Validacao.objects.filter(pk__in=[novo_id_menor.pk, novo_id_maior.pk]).update(criado_em=momento_novo)
+
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("api:item-detail", kwargs={"pk": item.pk}))
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["ultima_devolucao"]["id"], novo_id_maior.pk)
+        self.assertEqual(resp.data["ultima_devolucao"]["comentario"], "Devolucao nova id maior")
+
+    def test_validacoes_diferentes_de_devolvido_sao_ignoradas(self):
+        from apps.validacoes.models import Validacao, TipoAcao
+
+        demanda = self.criar_demanda_com_devolucoes(0)
+        item = ItemDemanda.objects.create(
+            demanda=demanda, tipo="material", nome="Item aprovado",
+            descricao="d", unidade_medida="un", quantidade=1,
+            valor_estimado=Decimal("10"), valor_total=Decimal("10"),
+            data_prevista=date(2027, 1, 1), prioridade="media",
+            justificativa_prioridade="a", justificativa_necessidade="b",
+            indicacao_orcamentaria="c", status=StatusItemDemanda.DEVOLVIDA,
+        )
+        Validacao.objects.create(
+            item_demanda=item, usuario=self.admin, acao=TipoAcao.VALIDADO,
+            comentario="Nao deve aparecer"
+        )
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("api:item-detail", kwargs={"pk": item.pk}))
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertIsNone(resp.data["ultima_devolucao"])
+        self.assertEqual(resp.data["justificativa_devolucao"], "")
+
+    def test_ausencia_de_devolucao_retorna_ultima_devolucao_nula(self):
+        demanda = self.criar_demanda_com_devolucoes(0)
+        item = ItemDemanda.objects.create(
+            demanda=demanda, tipo="material", nome="Item sem parecer",
+            descricao="d", unidade_medida="un", quantidade=1,
+            valor_estimado=Decimal("10"), valor_total=Decimal("10"),
+            data_prevista=date(2027, 1, 1), prioridade="media",
+            justificativa_prioridade="a", justificativa_necessidade="b",
+            indicacao_orcamentaria="c", status=StatusItemDemanda.DEVOLVIDA,
+        )
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("api:item-detail", kwargs={"pk": item.pk}))
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertIsNone(resp.data["ultima_devolucao"])
+
+    def test_detail_queries_estaveis_com_1_e_10_itens(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        demanda_1 = self.criar_demanda_com_devolucoes(1)
+        demanda_10 = self.criar_demanda_com_devolucoes(10)
+        self.client.force_login(self.user)
+
+        with CaptureQueriesContext(connection) as ctx1:
+            resp1 = self.client.get(reverse("api:demanda-detail", kwargs={"pk": demanda_1.pk}))
+        with CaptureQueriesContext(connection) as ctx10:
+            resp10 = self.client.get(reverse("api:demanda-detail", kwargs={"pk": demanda_10.pk}))
+
+        self.assertEqual(resp1.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp10.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(ctx1), len(ctx10))
+
+    def test_list_queries_estaveis_com_1_e_10_demandas(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        self.criar_demanda_com_devolucoes(1)
+        self.client.force_login(self.user)
+        with CaptureQueriesContext(connection) as ctx1:
+            resp1 = self.client.get(reverse("api:demanda-list"))
+
+        for _ in range(9):
+            self.criar_demanda_com_devolucoes(1)
+        with CaptureQueriesContext(connection) as ctx10:
+            resp10 = self.client.get(reverse("api:demanda-list"))
+
+        self.assertEqual(resp1.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp10.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(ctx1), len(ctx10))
