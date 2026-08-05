@@ -1,2 +1,10 @@
+from django.contrib import admin
 
-# Register your models here.
+from .models import Unidade
+
+
+@admin.register(Unidade)
+class UnidadeAdmin(admin.ModelAdmin):
+    list_display = ("sigla", "nome", "codigo", "ativo")
+    list_filter = ("ativo",)
+    search_fields = ("sigla", "nome", "codigo")

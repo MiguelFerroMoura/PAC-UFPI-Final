@@ -100,25 +100,25 @@ principal de cadastro, validação, devolução, consolidação e DFD.
 
 ## Semana 1 — Catálogo e formulário
 
-- [ ] **P0 — Registrar modelos no Django Admin**
-  - [ ] Unidade
-  - [ ] GrupoContratacao
-  - [ ] ItemCatalogo
-  - [ ] Validacao
-  - [ ] DFD
-  - [ ] LogAuditoria
+- [x] **P0 — Registrar modelos no Django Admin**
+  - [x] Unidade
+  - [x] GrupoContratacao
+  - [x] ItemCatalogo
+  - [x] Validacao
+  - [x] DFD
+  - [x] LogAuditoria
 
-- [ ] **P0 — Criar API do catálogo**
-  - [ ] Serializer
-  - [ ] ViewSet
-  - [ ] Rotas
-  - [ ] Pesquisa por nome/código
-  - [ ] Filtro por grupo
-  - [ ] Permissões
-  - [ ] Ativar/desativar item
+- [x] **P0 — Criar API do catálogo**
+  - [x] Serializer
+  - [x] ViewSet
+  - [x] Rotas
+  - [x] Pesquisa por nome/código
+  - [x] Filtro por grupo
+  - [x] Permissões
+  - [x] Ativar/desativar item
 
-- [ ] **P0 — Criar telas do catálogo**
-  - [ ] Listagem
+- [~] **P0 — Criar telas do catálogo**
+  - [x] Listagem básica
   - [ ] Pesquisa
   - [ ] Cadastro
   - [ ] Edição
@@ -129,7 +129,7 @@ principal de cadastro, validação, devolução, consolidação e DFD.
   - [ ] Buscar itens pela API
   - [ ] Selecionar item do catálogo
   - [ ] Autopreencher preço
-  - [ ] Calcular valor total
+  - [x] Calcular valor total no backend
   - [ ] Bloquear duplicidade
   - [ ] Exigir justificativa de prioridade apenas quando alta
 
@@ -274,6 +274,19 @@ Registrar neste formato:
 - Bloqueio:
   - SQLite não valida lock real por linha com `select_for_update`; semântica concorrente deve ser confirmada em banco com suporte a row locks.
   - Fluxos legados/server-side de validação, consolidação e reenvio ainda têm pontos com ordem item → demanda e precisam de cobertura própria antes de refatoração ampla.
+
+### Miguel
+
+- Feito:
+  - Modelos da Semana 1 registrados no Django Admin: Unidade, GrupoContratacao, ItemCatalogo, Validacao, DFD e LogAuditoria.
+  - API do catálogo completada com listagem, criação, edição, exclusão, busca por nome/código, filtro por grupo, filtro por ativo para ADMIN e ações de ativar/desativar.
+  - Permissões da API do catálogo: leitura autenticada apenas de itens ativos para usuário comum; escrita e consulta de inativos restritas a ADMIN/ADMIN MASTER.
+  - Testes básicos adicionados para registro no Admin e contrato da API de catálogo.
+- Em andamento:
+  - Tela de catálogo: listagem básica pronta; pesquisa, cadastro, edição, ativação/desativação e mensagens completas ainda pendentes.
+  - Integração do catálogo ao formulário de demanda: ainda pendente; o formulário segue criando item manual.
+- Bloqueio:
+  - Nenhum.
 
 ---
 

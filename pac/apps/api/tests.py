@@ -9,17 +9,20 @@ from datetime import date
 from decimal import Decimal
 from unittest import mock
 
+from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from apps.catalogo.models import ItemCatalogo
+from apps.auditoria.models import LogAuditoria
 from apps.demandas.models import Demanda, ItemDemanda, StatusDemanda, StatusItemDemanda
 from apps.demandas.services import sincronizar_status_macro_demanda
 from apps.dfd.models import DFD
 from apps.grupos_contratacao.models import GrupoContratacao
 from apps.unidades.models import Unidade
+from apps.validacoes.models import Validacao
 
 Usuario = get_user_model()
 
@@ -940,6 +943,107 @@ class CatalogoDashboardTests(APITestCase):
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(resp.data["count"], 1)
 
+    def test_catalogo_busca_por_nome_ou_codigo(self):
+        ItemCatalogo.objects.create(
+            tipo="material", nome="Teclado", codigo_catmat_catser="CAT-123",
+            grupo=self.grupo, unidade_medida="un", valor_estimado=Decimal("80"),
+        )
+        self.client.force_login(self.user)
+
+        por_nome = self.client.get(reverse("api:catalogo-list"), {"q": "mouse"})
+        por_codigo = self.client.get(reverse("api:catalogo-list"), {"q": "CAT-123"})
+
+        self.assertEqual(por_nome.status_code, status.HTTP_200_OK)
+        self.assertEqual(por_codigo.status_code, status.HTTP_200_OK)
+        self.assertEqual(por_nome.data["count"], 1)
+        self.assertEqual(por_nome.data["results"][0]["nome"], "Mouse")
+        self.assertEqual(por_codigo.data["count"], 1)
+        self.assertEqual(por_codigo.data["results"][0]["nome"], "Teclado")
+
+    def test_catalogo_filtra_por_grupo_e_ativo(self):
+        outra_unidade = criar_unidade("CAT2")
+        outro_grupo = GrupoContratacao.objects.create(
+            nome="Almoxarifado", unidade_admin=outra_unidade
+        )
+        ativo_outro_grupo = ItemCatalogo.objects.create(
+            tipo="material", nome="Papel", grupo=outro_grupo,
+            unidade_medida="resma", valor_estimado=Decimal("30"),
+        )
+        inativo = ItemCatalogo.objects.create(
+            tipo="material", nome="Monitor antigo", grupo=self.grupo,
+            unidade_medida="un", valor_estimado=Decimal("500"), ativo=False,
+        )
+        admin_user = criar_usuario("cat_admin", unidade=self.unidade, is_staff=True, perfil="admin")
+
+        self.client.force_login(self.user)
+        resp_grupo = self.client.get(reverse("api:catalogo-list"), {"grupo": outro_grupo.pk})
+        resp_inativo_usuario = self.client.get(reverse("api:catalogo-list"), {"ativo": "false"})
+
+        self.assertEqual(resp_grupo.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp_grupo.data["count"], 1)
+        self.assertEqual(resp_grupo.data["results"][0]["id"], ativo_outro_grupo.pk)
+        self.assertEqual(resp_inativo_usuario.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp_inativo_usuario.data["count"], 0)
+
+        self.client.force_login(admin_user)
+        resp_inativo_admin = self.client.get(reverse("api:catalogo-list"), {"ativo": "false"})
+        self.assertEqual(resp_inativo_admin.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp_inativo_admin.data["count"], 1)
+        self.assertEqual(resp_inativo_admin.data["results"][0]["id"], inativo.pk)
+
+    def test_catalogo_escrita_exige_admin(self):
+        self.client.force_login(self.user)
+
+        criar = self.client.post(reverse("api:catalogo-list"), {
+            "tipo": "material",
+            "nome": "Cabo HDMI",
+            "grupo": self.grupo.pk,
+            "unidade_medida": "un",
+            "valor_estimado": "25.00",
+        })
+        editar = self.client.patch(reverse("api:catalogo-detail", kwargs={"pk": 1}), {"nome": "Mouse 2"})
+        excluir = self.client.delete(reverse("api:catalogo-detail", kwargs={"pk": 1}))
+        desativar = self.client.post(reverse("api:catalogo-desativar", kwargs={"pk": 1}))
+
+        self.assertEqual(criar.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(editar.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(excluir.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(desativar.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_admin_gerencia_catalogo_e_ativa_desativa(self):
+        admin_user = criar_usuario("cat_admin2", unidade=self.unidade, is_staff=True, perfil="admin")
+        self.client.force_login(admin_user)
+
+        criar = self.client.post(reverse("api:catalogo-list"), {
+            "tipo": "servico",
+            "nome": "Manutencao preventiva",
+            "descricao": "Servico anual",
+            "codigo_catmat_catser": "SER-001",
+            "grupo": self.grupo.pk,
+            "unidade_medida": "servico",
+            "valor_estimado": "1000.00",
+        })
+        self.assertEqual(criar.status_code, status.HTTP_201_CREATED)
+        item_id = criar.data["id"]
+
+        editar = self.client.patch(
+            reverse("api:catalogo-detail", kwargs={"pk": item_id}),
+            {"valor_estimado": "1200.00"},
+        )
+        self.assertEqual(editar.status_code, status.HTTP_200_OK)
+        self.assertEqual(Decimal(editar.data["valor_estimado"]), Decimal("1200.00"))
+
+        desativar = self.client.post(reverse("api:catalogo-desativar", kwargs={"pk": item_id}))
+        self.assertEqual(desativar.status_code, status.HTTP_200_OK)
+        self.assertFalse(desativar.data["ativo"])
+
+        ativar = self.client.post(reverse("api:catalogo-ativar", kwargs={"pk": item_id}))
+        self.assertEqual(ativar.status_code, status.HTTP_200_OK)
+        self.assertTrue(ativar.data["ativo"])
+
+        excluir = self.client.delete(reverse("api:catalogo-detail", kwargs={"pk": item_id}))
+        self.assertEqual(excluir.status_code, status.HTTP_204_NO_CONTENT)
+
     def test_dashboard_stats(self):
         Demanda.objects.create(
             unidade=self.unidade, usuario=self.user, ano_referencia=2027
@@ -947,6 +1051,22 @@ class CatalogoDashboardTests(APITestCase):
         self.client.force_login(self.user)
         resp = self.client.get(reverse("api:dashboard-stats"))
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+
+class AdminRegistrationTests(APITestCase):
+    def test_modelos_da_semana_1_do_miguel_registrados_no_admin(self):
+        modelos = [
+            Unidade,
+            GrupoContratacao,
+            ItemCatalogo,
+            Validacao,
+            DFD,
+            LogAuditoria,
+        ]
+
+        for modelo in modelos:
+            with self.subTest(modelo=modelo.__name__):
+                self.assertIn(modelo, admin.site._registry)
 
 
 class ItemDevolvidoRedPoliticaAcessoTests(APITestCase):

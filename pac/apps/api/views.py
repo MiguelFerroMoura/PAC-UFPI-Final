@@ -8,7 +8,7 @@ sobre endpoints JSON.
 
 from django.contrib.auth import authenticate, login, logout
 from django.db import transaction
-from django.db.models import Count, Sum
+from django.db.models import Count, Q, Sum
 from django.middleware.csrf import get_token
 from django.utils import timezone
 from rest_framework import status, viewsets
@@ -115,11 +115,51 @@ class ItemCatalogoViewSet(viewsets.ModelViewSet):
     queryset = ItemCatalogo.objects.select_related("grupo").all()
     serializer_class = ItemCatalogoSerializer
 
+    def get_permissions(self):
+        if self.action in ["create", "update", "partial_update", "destroy", "ativar", "desativar"]:
+            return [IsAuthenticated(), IsAdminUserPermission()]
+        return [IsAuthenticated()]
+
     def get_queryset(self):
         qs = super().get_queryset()
-        if self.request.query_params.get("ativo") == "true":
+        user = self.request.user
+        termo = self.request.query_params.get("q") or self.request.query_params.get("search")
+        grupo = self.request.query_params.get("grupo")
+        ativo = self.request.query_params.get("ativo")
+
+        if termo:
+            qs = qs.filter(
+                Q(nome__icontains=termo)
+                | Q(codigo_catmat_catser__icontains=termo)
+            )
+        if grupo:
+            qs = qs.filter(grupo_id=grupo)
+
+        if getattr(user, "is_admin_user", False):
+            if ativo in ["true", "1", "sim"]:
+                qs = qs.filter(ativo=True)
+            elif ativo in ["false", "0", "nao"]:
+                qs = qs.filter(ativo=False)
+        else:
             qs = qs.filter(ativo=True)
+            if ativo in ["false", "0", "nao"]:
+                qs = qs.none()
+
         return qs
+
+    @action(detail=True, methods=["post"])
+    def ativar(self, request, pk=None):
+        item = self.get_object()
+        item.ativo = True
+        item.save(update_fields=["ativo", "atualizado_em"])
+        return Response(self.get_serializer(item).data)
+
+    @action(detail=True, methods=["post"])
+    def desativar(self, request, pk=None):
+        item = self.get_object()
+        item.ativo = False
+        item.save(update_fields=["ativo", "atualizado_em"])
+        return Response(self.get_serializer(item).data)
 
 
 # =============================================================================
