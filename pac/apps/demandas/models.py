@@ -19,6 +19,19 @@ class StatusItemDemanda(models.TextChoices):
     CANCELADA = "cancelada", "Cancelada"
 
 
+class CicloPAC(models.Model):
+    """Ciclo anual ao qual as demandas e DFDs pertencem."""
+
+    ano = models.PositiveIntegerField(unique=True)
+    ativo = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["-ano"]
+
+    def __str__(self):
+        return str(self.ano)
+
+
 class Prioridade(models.TextChoices):
     BAIXA = "baixa", "Baixa"
     MEDIA = "media", "Média"
@@ -61,6 +74,10 @@ class Demanda(models.Model):
         verbose_name="Ano de Referência"
     )
 
+    ciclo_pac = models.ForeignKey(
+        CicloPAC, on_delete=models.PROTECT, related_name="demandas"
+    )
+
     status = models.CharField(
         verbose_name="Status",
         max_length=30,
@@ -93,6 +110,9 @@ class Demanda(models.Model):
         ordering = ["-criado_em"]
 
     def save(self, *args, **kwargs):
+        if not self.ciclo_pac_id:
+            ciclo, _ = CicloPAC.objects.get_or_create(ano=self.ano_referencia)
+            self.ciclo_pac = ciclo
         # Nota: O cálculo aqui estava sem indentação no original.
         # No entanto, o campo valor_total pertence ao ItemDemanda, não à Demanda.
         # Vou remover este método save da Demanda pois ele causaria erro de atributo.
@@ -120,6 +140,11 @@ class ItemDemanda(models.Model):
         verbose_name="Demanda",
         on_delete=models.CASCADE,
         related_name="itens"
+    )
+
+    dfd = models.ForeignKey(
+        "dfd.DFD", on_delete=models.PROTECT, related_name="itens_vinculados",
+        null=True, blank=True,
     )
 
     item_catalogo = models.ForeignKey(

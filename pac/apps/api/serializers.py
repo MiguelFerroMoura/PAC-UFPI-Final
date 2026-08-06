@@ -73,6 +73,11 @@ class ItemCatalogoSerializer(serializers.ModelSerializer):
 # Demandas e itens
 # =============================================================================
 
+class DFDResumoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DFD
+        fields = ["id", "numero"]
+
 class ItemDemandaSerializer(serializers.ModelSerializer):
     # valor_total é calculado no back-end (quantidade × valor_estimado).
     valor_total = serializers.DecimalField(
@@ -81,6 +86,7 @@ class ItemDemandaSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(source="get_status_display", read_only=True)
     justificativa_devolucao = serializers.SerializerMethodField()
     ultima_devolucao = serializers.SerializerMethodField()
+    dfd = DFDResumoSerializer(read_only=True)
 
     class Meta:
         model = ItemDemanda
@@ -89,7 +95,7 @@ class ItemDemandaSerializer(serializers.ModelSerializer):
             "unidade_medida", "quantidade", "valor_estimado", "valor_total",
             "data_prevista", "prioridade", "justificativa_prioridade",
             "justificativa_necessidade", "indicacao_orcamentaria", "observacoes",
-            "status", "status_display", "justificativa_devolucao", "ultima_devolucao",
+            "status", "status_display", "dfd", "justificativa_devolucao", "ultima_devolucao",
         ]
         read_only_fields = ["demanda", "status"]
 
@@ -247,7 +253,7 @@ class DFDSerializer(serializers.ModelSerializer):
     class Meta:
         model = DFD
         fields = [
-            "id", "numero", "grupo", "grupo_nome", "criado_por",
+            "id", "numero", "ciclo_pac", "grupo", "grupo_nome", "criado_por",
             "criado_por_nome", "numero_processo", "link_publico",
             "observacao", "criado_em", "atualizado_em", "itens", "total",
         ]
@@ -255,3 +261,19 @@ class DFDSerializer(serializers.ModelSerializer):
 
     def get_total(self, obj):
         return sum((item.valor_total for item in obj.itens_demanda.all()), start=0)
+
+
+class ConsolidarDFDSerializer(serializers.Serializer):
+    numero_dfd = serializers.CharField(max_length=100, trim_whitespace=True)
+    ciclo_pac_id = serializers.IntegerField(min_value=1)
+    item_ids = serializers.ListField(child=serializers.IntegerField(min_value=1), allow_empty=False)
+
+    def validate_numero_dfd(self, value):
+        if not value:
+            raise serializers.ValidationError("O numero do DFD e obrigatorio.")
+        return value
+
+    def validate_item_ids(self, value):
+        if len(value) != len(set(value)):
+            raise serializers.ValidationError("A lista contem IDs duplicados.")
+        return value

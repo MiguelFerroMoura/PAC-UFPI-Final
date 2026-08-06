@@ -23,6 +23,9 @@ env/
 
 # Environment variables
 .env
+.env.local
+.env.production
+.env.homologacao
 
 # Django
 db.sqlite3
