@@ -82,13 +82,13 @@ jobs:
         working-directory: pac
         run: python manage.py migrate --noinput
 
-      - name: Executar testes
-        working-directory: pac
-        run: python manage.py test --verbosity 2
-
       - name: Coletar arquivos estáticos
         working-directory: pac
         run: python manage.py collectstatic --noinput
+
+      - name: Executar testes
+        working-directory: pac
+        run: python manage.py test --verbosity 2
 
   frontend:
     name: Front-end React (lint, testes e build)
