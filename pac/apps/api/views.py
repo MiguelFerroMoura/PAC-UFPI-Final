@@ -28,6 +28,8 @@ from apps.demandas.services import (
     sincronizar_status_macro_demanda,
 )
 from apps.dfd.models import DFD
+from apps.dfd.selectors import agrupar_itens_elegiveis, listar_itens_elegiveis
+from apps.dfd.services import ConflitoConsolidacao, consolidar_itens_em_dfd
 from apps.grupos_contratacao.models import GrupoContratacao
 from apps.unidades.models import Unidade
 from apps.validacoes.models import TipoAcao, Validacao
@@ -36,6 +38,7 @@ from .permissions import IsAdminUserPermission
 from .serializers import (
     DemandaSerializer,
     DFDSerializer,
+    ConsolidarDFDSerializer,
     GrupoContratacaoSerializer,
     ItemCatalogoSerializer,
     ItemDemandaCorrecaoSerializer,
@@ -179,7 +182,7 @@ class DemandaViewSet(viewsets.ModelViewSet):
         )
         itens_prefetch = Prefetch(
             "itens",
-            queryset=ItemDemanda.objects.prefetch_related(ultima_devolucao_prefetch)
+            queryset=ItemDemanda.objects.select_related("dfd").prefetch_related(ultima_devolucao_prefetch)
         )
         qs = (
             Demanda.objects.select_related("unidade", "usuario")
@@ -469,7 +472,7 @@ class ItemDemandaViewSet(viewsets.ModelViewSet):
         )
         qs = (
             ItemDemanda.objects.select_related(
-                "demanda", "demanda__usuario", "item_catalogo__grupo__unidade_admin"
+                "demanda", "demanda__usuario", "dfd", "item_catalogo__grupo__unidade_admin"
             )
             .prefetch_related(ultima_devolucao_prefetch)
         )
@@ -653,6 +656,70 @@ class ValidacaoViewSet(viewsets.ReadOnlyModelViewSet):
 # =============================================================================
 # DFD
 # =============================================================================
+
+class ItensElegiveisConsolidacaoView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminUserPermission]
+
+    def get(self, request):
+        queryset = listar_itens_elegiveis(
+            usuario=request.user,
+            ciclo_pac_id=request.query_params.get("ciclo_pac_id"),
+            item_catalogo_id=request.query_params.get("item_catalogo_id"),
+            grupo_contratacao_id=request.query_params.get("grupo_contratacao_id"),
+        )
+        return Response(agrupar_itens_elegiveis(queryset))
+
+
+class ConsolidarDFDView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminUserPermission]
+
+    def post(self, request):
+        # Compatibilidade temporaria para clientes da API anterior. O novo
+        # contrato abaixo e o unico aceito para novas integracoes.
+        if "numero" in request.data:
+            return self._post_legado(request)
+        serializer = ConsolidarDFDSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            resultado = consolidar_itens_em_dfd(usuario=request.user, **serializer.validated_data)
+        except ConflitoConsolidacao as error:
+            return Response(
+                {"code": "ITEM_NAO_ELEGIVEL", "detail": error.message, "item_ids": error.item_ids},
+                status=status.HTTP_409_CONFLICT,
+            )
+        dfd = resultado["dfd"]
+        return Response({
+            "dfd": {"id": dfd.id, "numero": dfd.numero},
+            "itens_vinculados": len(resultado["itens"]),
+            "demandas_afetadas": resultado["demandas_afetadas"],
+        }, status=status.HTTP_201_CREATED if resultado["criado"] else status.HTTP_200_OK)
+
+    def _post_legado(self, request):
+        numero, grupo_id = request.data.get("numero"), request.data.get("grupo")
+        item_ids = list(dict.fromkeys(request.data.get("itens") or []))
+        if not numero or not grupo_id or not item_ids:
+            return Response({"detail": "Informe numero, grupo e ao menos um item."}, status=status.HTTP_400_BAD_REQUEST)
+        with transaction.atomic():
+            itens = list(ItemDemanda.objects.select_for_update().filter(id__in=item_ids))
+            if len(itens) != len(item_ids):
+                return Response({"detail": "Um ou mais itens nao foram encontrados."}, status=status.HTTP_400_BAD_REQUEST)
+            demandas = list(Demanda.objects.select_for_update().filter(id__in={item.demanda_id for item in itens}).order_by("id"))
+            if any(d.status in [StatusDemanda.CONCLUIDA, StatusDemanda.CANCELADA] for d in demandas):
+                return Response({"detail": "Solicitacao encerrada ou cancelada."}, status=status.HTTP_409_CONFLICT)
+            if any(not pode_transicionar_item(item.status, StatusItemDemanda.VINCULADA_DFD) for item in itens):
+                return Response({"detail": "Item nao pode ser consolidado."}, status=status.HTTP_400_BAD_REQUEST)
+            ciclo_ids = {item.demanda.ciclo_pac_id for item in itens}
+            if len(ciclo_ids) != 1:
+                return Response({"detail": "Itens de ciclos diferentes."}, status=status.HTTP_400_BAD_REQUEST)
+            dfd = DFD.objects.create(numero=numero, grupo_id=grupo_id, ciclo_pac_id=ciclo_ids.pop(), criado_por=request.user)
+            for item in itens:
+                item.dfd = dfd
+                item.status = StatusItemDemanda.VINCULADA_DFD
+            ItemDemanda.objects.bulk_update(itens, ["dfd", "status"])
+            dfd.itens_demanda.add(*itens)
+            for demanda in demandas:
+                sincronizar_status_macro_demanda(demanda)
+            return Response(DFDSerializer(dfd).data, status=status.HTTP_201_CREATED)
 
 class DFDViewSet(viewsets.ModelViewSet):
     queryset = (

@@ -16,8 +16,7 @@ class DFD(models.Model):
 
     numero = models.CharField(
         verbose_name="Número do DFD",
-        max_length=50,
-        unique=True
+        max_length=100,
     )
 
     grupo = models.ForeignKey(
@@ -25,6 +24,10 @@ class DFD(models.Model):
         verbose_name="Grupo de Contratação",
         on_delete=models.PROTECT,
         related_name="dfds"
+    )
+
+    ciclo_pac = models.ForeignKey(
+        "demandas.CicloPAC", on_delete=models.PROTECT, related_name="dfds"
     )
 
     criado_por = models.ForeignKey(
@@ -69,6 +72,11 @@ class DFD(models.Model):
         verbose_name = "DFD"
         verbose_name_plural = "DFDs"
         ordering = ["-criado_em"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["numero", "ciclo_pac"], name="uniq_dfd_numero_por_ciclo"
+            )
+        ]
 
     def __str__(self):
         return f"DFD {self.numero}"
