@@ -17,18 +17,18 @@ principal de cadastro, validação, devolução, consolidação e DFD.
 
 # Fluxo que precisa funcionar
 
-- [ ] ADMIN cadastra item no catálogo
-- [ ] USUÁRIO cria uma demanda
-- [ ] USUÁRIO adiciona itens do catálogo
-- [ ] USUÁRIO salva a demanda como rascunho
-- [ ] USUÁRIO envia a demanda
-- [ ] ADMIN visualiza os itens pendentes
-- [ ] ADMIN valida ou devolve cada item
+- [~] ADMIN cadastra item no catálogo (Backend OK, UI React parcial)
+- [x] USUÁRIO cria uma demanda
+- [~] USUÁRIO adiciona itens do catálogo (Backend OK, autocompletar em UI React pendente)
+- [x] USUÁRIO salva a demanda como rascunho
+- [x] USUÁRIO envia a demanda
+- [x] ADMIN visualiza os itens pendentes
+- [x] ADMIN valida ou devolve cada item
 - [x] USUÁRIO visualiza o motivo da devolução
 - [x] USUÁRIO corrige e reenvia o item
-- [ ] ADMIN consolida os itens validados
-- [ ] ADMIN vincula os itens a um DFD
-- [ ] USUÁRIO visualiza o número do DFD
+- [x] ADMIN consolida os itens validados
+- [x] ADMIN vincula os itens a um DFD
+- [x] USUÁRIO visualiza o número do DFD
 
 ---
 
@@ -65,14 +65,14 @@ principal de cadastro, validação, devolução, consolidação e DFD.
   - [x] Retornar status para `AGUARDANDO_VALIDACAO`
   - [x] Preservar histórico das decisões
 
-- [ ] **P0 — Completar consolidação**
-  - [ ] Filtrar somente itens validados e sem DFD
-  - [ ] Agrupar por item do catálogo
-  - [ ] Somar quantidades
-  - [ ] Mostrar quantidade por unidade
-  - [ ] Criar/vincular DFD
-  - [ ] Atualizar status dos itens
-  - [ ] Exibir DFD na consulta do usuário
+- [x] **P0 — Completar consolidação**
+  - [x] Filtrar somente itens validados e sem DFD
+  - [x] Agrupar por item do catálogo
+  - [x] Somar quantidades
+  - [x] Mostrar quantidade por unidade
+  - [x] Criar/vincular DFD
+  - [x] Atualizar status dos itens
+  - [x] Exibir DFD na consulta do usuário
 
 ## Semana 3 — Integração e deploy
 
@@ -135,14 +135,14 @@ principal de cadastro, validação, devolução, consolidação e DFD.
 
 ## Semana 2 — Validação e interface
 
-- [ ] **P0 — Melhorar tela de validações**
-  - [ ] Listar itens pendentes
-  - [ ] Filtrar por unidade
-  - [ ] Filtrar por grupo
-  - [ ] Exibir detalhes do item
-  - [ ] Adicionar ação de validar
-  - [ ] Adicionar ação de devolver
-  - [ ] Exibir mensagens de erro
+- [x] **P0 — Melhorar tela de validações**
+  - [x] Listar itens pendentes
+  - [x] Filtrar por unidade
+  - [x] Filtrar por grupo
+  - [x] Exibir detalhes do item
+  - [x] Adicionar ação de validar
+  - [x] Adicionar ação de devolver
+  - [x] Exibir mensagens de erro
 
 - [~] **P0 — Interface do item devolvido**
   - [x] Exibir badge `DEVOLVIDO`
@@ -151,24 +151,24 @@ principal de cadastro, validação, devolução, consolidação e DFD.
   - [x] Mostrar botão de reenvio
   - [~] Exibir histórico básico (parcial: última devolução exibida; histórico completo ainda não implementado)
 
-- [ ] **P1 — Interface da consolidação**
-  - [ ] Tabela de itens agrupados
-  - [ ] Quantidade total
-  - [ ] Detalhamento por unidade
-  - [ ] Seleção de itens
-  - [ ] Formulário do número do DFD
-  - [ ] Feedback de consolidação concluída
+- [x] **P1 — Interface da consolidação**
+  - [x] Tabela de itens agrupados
+  - [x] Quantidade total
+  - [x] Detalhamento por unidade
+  - [x] Seleção de itens
+  - [x] Formulário do número do DFD
+  - [x] Feedback de consolidação concluída
 
 ## Semana 3 — Acabamento
 
-- [ ] **P1 — Melhorar dashboard**
-  - [ ] Total de demandas
-  - [ ] Total de itens
-  - [ ] Valor total
-  - [ ] Itens por status
-  - [ ] Total de DFDs
-  - [ ] Percentual validado
-  - [ ] Percentual consolidado
+- [x] **P1 — Melhorar dashboard**
+  - [x] Total de demandas
+  - [x] Total de itens
+  - [x] Valor total
+  - [x] Itens por status
+  - [x] Total de DFDs
+  - [x] Percentual validado
+  - [x] Percentual consolidado
 
 - [ ] **P1 — Revisar frontend**
   - [ ] Estados de carregamento
@@ -294,14 +294,14 @@ Registrar neste formato:
 
 O MVP estará pronto quando o fluxo abaixo funcionar no ambiente publicado:
 
-- [ ] Cadastro de catálogo
-- [ ] Criação da demanda
-- [ ] Inclusão de itens
-- [ ] Salvamento como rascunho
-- [ ] Envio para validação
-- [ ] Validação individual
+- [~] Cadastro de catálogo (Backend OK, UI React parcial)
+- [x] Criação da demanda
+- [~] Inclusão de itens (Item manual OK, autocompletar do catálogo no frontend em andamento)
+- [x] Salvamento como rascunho
+- [x] Envio para validação
+- [x] Validação individual
 - [x] Devolução com justificativa
 - [x] Correção e reenvio
-- [ ] Consolidação
-- [ ] Vinculação de DFD
-- [ ] Visualização do DFD pelo solicitante
+- [x] Consolidação
+- [x] Vinculação de DFD
+- [x] Visualização do DFD pelo solicitante
