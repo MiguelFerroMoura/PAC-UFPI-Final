@@ -8,7 +8,7 @@ from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
 from apps.catalogo.models import ItemCatalogo
-from apps.demandas.models import Demanda, ItemDemanda, StatusDemanda, StatusItemDemanda
+from apps.demandas.models import Demanda, ItemDemanda, StatusItemDemanda
 from apps.dfd.models import DFD
 from apps.grupos_contratacao.models import GrupoContratacao
 from apps.unidades.models import Unidade
@@ -104,7 +104,7 @@ class ItemDemandaSerializer(serializers.ModelSerializer):
         if devolucoes is not None:
             val = devolucoes[0] if devolucoes else None
         else:
-            from apps.validacoes.models import Validacao, TipoAcao
+            from apps.validacoes.models import TipoAcao
             val = (
                 obj.validacoes.filter(acao=TipoAcao.DEVOLVIDO)
                 .select_related("usuario")
