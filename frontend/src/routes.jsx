@@ -33,6 +33,7 @@ export default function AppRoutes() {
         <Route path="demandas/:id" element={auth(<DemandaDetail />)} />
         <Route path="demandas/:id/editar" element={auth(<DemandaForm />)} />
         <Route path="demandas/:id/itens/novo" element={auth(<ItemForm />)} />
+        <Route path="demandas/:id/itens/:itemId/editar" element={auth(<ItemForm />)} />
 
         {/* Catálogo e Dashboard */}
         <Route path="catalogo" element={auth(<Catalogo />)} />

@@ -8,7 +8,7 @@ from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
 from apps.catalogo.models import ItemCatalogo
-from apps.demandas.models import Demanda, ItemDemanda, StatusDemanda
+from apps.demandas.models import Demanda, ItemDemanda, StatusDemanda, StatusItemDemanda
 from apps.dfd.models import DFD
 from apps.grupos_contratacao.models import GrupoContratacao
 from apps.unidades.models import Unidade
@@ -73,12 +73,20 @@ class ItemCatalogoSerializer(serializers.ModelSerializer):
 # Demandas e itens
 # =============================================================================
 
+class DFDResumoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DFD
+        fields = ["id", "numero"]
+
 class ItemDemandaSerializer(serializers.ModelSerializer):
     # valor_total é calculado no back-end (quantidade × valor_estimado).
     valor_total = serializers.DecimalField(
         max_digits=14, decimal_places=2, read_only=True
     )
     status_display = serializers.CharField(source="get_status_display", read_only=True)
+    justificativa_devolucao = serializers.SerializerMethodField()
+    ultima_devolucao = serializers.SerializerMethodField()
+    dfd = DFDResumoSerializer(read_only=True)
 
     class Meta:
         model = ItemDemanda
@@ -86,17 +94,101 @@ class ItemDemandaSerializer(serializers.ModelSerializer):
             "id", "demanda", "item_catalogo", "tipo", "nome", "descricao",
             "unidade_medida", "quantidade", "valor_estimado", "valor_total",
             "data_prevista", "prioridade", "justificativa_prioridade",
-            "justificativa_necessidade", "indicacao_orcamentaria",
-            "status", "status_display",
+            "justificativa_necessidade", "indicacao_orcamentaria", "observacoes",
+            "status", "status_display", "dfd", "justificativa_devolucao", "ultima_devolucao",
         ]
         read_only_fields = ["demanda", "status"]
+
+    def get_ultima_devolucao(self, obj):
+        devolucoes = getattr(obj, "devolucoes_prefetched", None)
+        if devolucoes is not None:
+            val = devolucoes[0] if devolucoes else None
+        else:
+            from apps.validacoes.models import Validacao, TipoAcao
+            val = (
+                obj.validacoes.filter(acao=TipoAcao.DEVOLVIDO)
+                .select_related("usuario")
+                .order_by("-criado_em", "-id")
+                .first()
+            )
+        if not val:
+            return None
+        return {
+            "id": val.id,
+            "comentario": val.comentario,
+            "criado_em": val.criado_em,
+            "responsavel": {
+                "id": val.usuario_id,
+                "nome": val.usuario.get_full_name() or val.usuario.username,
+            },
+        }
+
+    def get_justificativa_devolucao(self, obj):
+        val_data = self.get_ultima_devolucao(obj)
+        return val_data["comentario"] if val_data else ""
 
     def create(self, validated_data):
         validated_data["valor_total"] = (
             validated_data["quantidade"] * validated_data["valor_estimado"]
         )
-        validated_data["status"] = StatusDemanda.RASCUNHO
+        validated_data["status"] = StatusItemDemanda.RASCUNHO
         return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        instance = super().update(instance, validated_data)
+        instance.valor_total = instance.quantidade * instance.valor_estimado
+        instance.save(update_fields=["valor_total", "atualizado_em"])
+        return instance
+
+
+class ItemDemandaCorrecaoSerializer(serializers.ModelSerializer):
+    CAMPOS_MANUAIS = {
+        "tipo", "nome", "descricao", "unidade_medida", "quantidade",
+        "valor_estimado", "data_prevista", "prioridade",
+        "justificativa_prioridade", "justificativa_necessidade",
+        "indicacao_orcamentaria", "observacoes",
+    }
+    CAMPOS_CATALOGADOS = {
+        "quantidade", "valor_estimado", "data_prevista", "prioridade",
+        "justificativa_prioridade", "justificativa_necessidade",
+        "indicacao_orcamentaria", "observacoes",
+    }
+    CAMPOS_PROTEGIDOS = {
+        "demanda", "status", "valor_total", "criado_em", "atualizado_em",
+        "item_catalogo",
+    }
+    CAMPOS_HERDADOS_CATALOGO = {"tipo", "nome", "descricao", "unidade_medida", "item_catalogo"}
+
+    class Meta:
+        model = ItemDemanda
+        fields = [
+            "tipo", "nome", "descricao", "unidade_medida", "quantidade",
+            "valor_estimado", "data_prevista", "prioridade",
+            "justificativa_prioridade", "justificativa_necessidade",
+            "indicacao_orcamentaria", "observacoes",
+        ]
+
+    def validate(self, attrs):
+        raw_keys = set(getattr(self, "initial_data", {}).keys())
+        allowed = self.CAMPOS_CATALOGADOS if self.instance and self.instance.item_catalogo_id else self.CAMPOS_MANUAIS
+        errors = {}
+
+        for campo in sorted(raw_keys & self.CAMPOS_PROTEGIDOS):
+            errors[campo] = ["Campo protegido."]
+
+        for campo in sorted(raw_keys - self.CAMPOS_MANUAIS - self.CAMPOS_PROTEGIDOS):
+            errors[campo] = ["Campo desconhecido."]
+
+        if self.instance and self.instance.item_catalogo_id:
+            for campo in sorted(raw_keys & self.CAMPOS_HERDADOS_CATALOGO):
+                errors[campo] = ["Campo herdado do catalogo nao pode ser alterado."]
+
+        for campo in sorted(raw_keys - allowed - self.CAMPOS_PROTEGIDOS):
+            errors.setdefault(campo, ["Campo nao permitido."])
+
+        if errors:
+            raise serializers.ValidationError(errors)
+        return attrs
 
     def update(self, instance, validated_data):
         instance = super().update(instance, validated_data)
@@ -161,7 +253,7 @@ class DFDSerializer(serializers.ModelSerializer):
     class Meta:
         model = DFD
         fields = [
-            "id", "numero", "grupo", "grupo_nome", "criado_por",
+            "id", "numero", "ciclo_pac", "grupo", "grupo_nome", "criado_por",
             "criado_por_nome", "numero_processo", "link_publico",
             "observacao", "criado_em", "atualizado_em", "itens", "total",
         ]
@@ -169,3 +261,19 @@ class DFDSerializer(serializers.ModelSerializer):
 
     def get_total(self, obj):
         return sum((item.valor_total for item in obj.itens_demanda.all()), start=0)
+
+
+class ConsolidarDFDSerializer(serializers.Serializer):
+    numero_dfd = serializers.CharField(max_length=100, trim_whitespace=True)
+    ciclo_pac_id = serializers.IntegerField(min_value=1)
+    item_ids = serializers.ListField(child=serializers.IntegerField(min_value=1), allow_empty=False)
+
+    def validate_numero_dfd(self, value):
+        if not value:
+            raise serializers.ValidationError("O numero do DFD e obrigatorio.")
+        return value
+
+    def validate_item_ids(self, value):
+        if len(value) != len(set(value)):
+            raise serializers.ValidationError("A lista contem IDs duplicados.")
+        return value

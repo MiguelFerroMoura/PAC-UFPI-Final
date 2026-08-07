@@ -11,4 +11,5 @@ urlpatterns = [
     path("<int:pk>/enviar/", views.demanda_enviar, name="enviar"),
     path("<int:demanda_pk>/itens/novo/", views.item_create, name="item_criar"),
     path("itens/<int:pk>/editar/", views.item_update, name="item_editar"),
+    path("itens/<int:pk>/reenviar/", views.item_reenviar, name="item_reenviar"),
 ]

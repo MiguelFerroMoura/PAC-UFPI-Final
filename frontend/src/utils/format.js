@@ -13,9 +13,12 @@ export function formatCurrency(valor) {
 export const STATUS_LABELS = {
   rascunho: "Rascunho",
   aguardando_validacao: "Aguardando Validação",
+  em_andamento: "Em Andamento",
+  concluida: "Concluída",
   devolvida: "Devolvida",
   validada: "Validada",
   consolidada: "Consolidada no DFD",
+  vinculada_dfd: "Vinculada ao DFD",
   cancelada: "Cancelada",
 };
 
@@ -28,9 +31,12 @@ export function statusBadge(status) {
   const mapa = {
     rascunho: "bg-secondary",
     aguardando_validacao: "bg-warning text-dark",
+    em_andamento: "bg-info text-dark",
+    concluida: "bg-success",
     devolvida: "bg-danger",
     validada: "bg-success",
     consolidada: "bg-primary",
+    vinculada_dfd: "bg-primary",
     cancelada: "bg-dark",
   };
   return mapa[status] || "bg-secondary";
