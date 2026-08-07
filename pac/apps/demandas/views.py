@@ -1,13 +1,15 @@
 from decimal import Decimal
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
-from .constants import pode_transicionar_demanda, pode_transicionar_item
+from django.views.decorators.http import require_POST
+from .constants import pode_transicionar_demanda
 from .forms import DemandaForm, ItemDemandaForm
 from .models import Demanda, ItemDemanda, StatusDemanda, StatusItemDemanda
-from .services import sincronizar_status_macro_demanda
+from .services import sincronizar_status_macro_demanda, validar_item_para_envio
 
 @login_required
 def demanda_list(request):
@@ -137,11 +139,6 @@ def item_update(request, pk):
         return redirect("demandas:detalhe", pk=item.demanda_id)
 
     return render(request, "crud/form.html", {"form": form, "titulo": "Editar Item"})
-
-
-from django.views.decorators.http import require_POST
-from django.core.exceptions import ValidationError
-from .services import validar_item_para_envio
 
 
 @require_POST
