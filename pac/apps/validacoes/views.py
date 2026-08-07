@@ -1,7 +1,7 @@
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db import transaction
-from django.shortcuts import get_object_or_404, redirect, render
+from django.shortcuts import redirect, render
 from apps.demandas.constants import pode_transicionar_item
 from apps.demandas.models import Demanda, ItemDemanda, StatusDemanda, StatusItemDemanda
 from apps.demandas.services import sincronizar_status_macro_demanda
