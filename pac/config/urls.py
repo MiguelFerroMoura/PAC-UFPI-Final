@@ -28,6 +28,9 @@ urlpatterns = [
     # Django Admin
     path('admin/', admin.site.urls),
 
+    # API REST (consumida pelo front-end React)
+    path('api/', include('apps.api.urls')),
+
     # Página inicial
     path('', home, name='home'),
 

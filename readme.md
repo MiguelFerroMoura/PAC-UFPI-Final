@@ -1,245 +1,86 @@
-# Sistema de Gestão do Plano Anual de Contratações (PAC) - UFPI
+# Sistema de Gestão do PAC UFPI
 
-Sistema web para gerenciamento do Plano Anual de Contratações (PAC) da Universidade Federal do Piauí (UFPI).
+Plataforma web para cadastrar, validar, consolidar e acompanhar as demandas do Plano Anual de Contratações da UFPI. O projeto usa Django e Django REST Framework no back-end, React com Vite no front-end, Bootstrap para interface, SQLite para persistência local e Docker para execução em produção.
 
----
+## Como instalar e rodar o projeto
 
-# Sobre o projeto
+Pré-requisitos: Python 3.11+, Node.js 20+, npm e Git.
 
-O sistema PAC UFPI tem como objetivo centralizar o processo de cadastro, validação, consolidação e acompanhamento das demandas institucionais do Plano Anual de Contratações.
-
-A proposta é desenvolver uma aplicação web simples, organizada e de fácil manutenção para a equipe, utilizando Django com renderização server-side e Bootstrap no frontend.
-
----
-
-# Objetivo
-
-O sistema permitirá:
-
-- Cadastro de demandas por unidades;
-- Gerenciamento de itens do catálogo;
-- Validação e devolução de itens por administradores;
-- Consolidação de demandas em DFD;
-- Controle de status e fluxo das solicitações;
-- Rastreabilidade e auditoria;
-- Acompanhamento gerencial do PAC.
-
----
-
-# Stack
-
-## Backend
-
-- Django
-- Django ORM
-- Django Admin
-
-## Frontend
-
-- Templates Django
-- Bootstrap 5
-- JavaScript puro
-
-## Banco de dados
-
-- PostgreSQL
-- Supabase (deploy/MVP)
-
-## Infraestrutura
-
-- Docker Compose
-- Render
-
----
-
-# Arquitetura
-
-A aplicação seguirá uma arquitetura:
-
-- Monolítica;
-- Modular por apps Django;
-- Baseada no padrão MVC/MTV;
-- Com comunicação REST pontual para ações assíncronas e futuras integrações.
-
-## Organização arquitetural
-
-- **Models** → persistência e estrutura dos dados;
-- **Views** → fluxo e controle das requisições;
-- **Templates** → renderização das páginas HTML;
-- **Apps Django** → separação modular das responsabilidades do sistema.
-
----
-
-# Estrutura do projeto
-
-```txt
-pac/
-├── config/
-│
-├── apps/
-│   ├── usuarios/
-│   ├── unidades/
-│   ├── grupos_contratacao/
-│   ├── catalogo/
-│   ├── demandas/
-│   ├── validacoes/
-│   ├── dfd/
-│   ├── dashboard/
-│   └── auditoria/
-│
-├── templates/
-│
-├── static/
-│
-└── manage.py
-```
-
----
-
-# Módulos principais
-
-| App Django | Responsabilidade |
-|---|---|
-| usuarios | Usuários, autenticação e permissões |
-| unidades | Cadastro das unidades |
-| grupos_contratacao | Governança por grupos de contratação |
-| catalogo | Itens e serviços disponíveis |
-| demandas | Fluxo principal das demandas |
-| validacoes | Validação e devolução de itens |
-| dfd | Consolidação e vínculo de DFD |
-| dashboard | Indicadores gerenciais |
-| auditoria | Histórico e rastreabilidade |
-
----
-
-# Fluxo básico do sistema
-
-```txt
-Usuário cria demanda
-        ↓
-Usuário adiciona itens
-        ↓
-Usuário envia demanda
-        ↓
-ADMIN valida ou devolve
-        ↓
-Itens validados são consolidados
-        ↓
-DFD é vinculado
-        ↓
-Dashboard acompanha execução
-```
-
----
-
-# Perfis do sistema
-
-| Perfil | Responsabilidade |
-|---|---|
-| USUÁRIO | Cadastro e acompanhamento das demandas |
-| ADMIN | Validação, devolução e consolidação |
-| ADMIN MASTER | Governança geral do sistema e do PAC |
-
----
-
-# Como rodar localmente
-
-## Pré-requisitos
-
-- Docker
-- Docker Compose
-- Python 3.12+
-- Git
-
----
-
-## Clonar o projeto
+1. Clone o repositório e entre na pasta do projeto:
 
 ```bash
-git clone <url-do-repositorio>
+     <url-do-repositorio>
 cd PAC-UFPI-Final
 ```
 
----
-
-## Subir o PostgreSQL
-
-```bash
-docker compose up -d
-```
-
----
-
-## Criar ambiente virtual
+2. Crie e ative o ambiente virtual:
 
 ```bash
 python -m venv venv
-```
-
-### Linux/macOS
-
-```bash
-source venv/bin/activate
-```
-
-### Windows
-
-```bash
 venv\Scripts\activate
 ```
 
----
-
-## Instalar dependências
+3. Instale as dependências do back-end:
 
 ```bash
 pip install -r requirements.txt
 ```
 
----
-
-## Executar migrations
+4. Copie o arquivo de ambiente e ajuste os valores, se necessário:
 
 ```bash
+copy .env.example .env
+```
+
+5. Aplique as migrações e suba a API:
+
+```bash
+cd pac
 python manage.py migrate
-```
-
----
-
-## Criar superusuário
-
-```bash
 python manage.py createsuperuser
-```
-
----
-
-## Rodar servidor local
-
-```bash
 python manage.py runserver
 ```
 
----
+6. Em outro terminal, suba o front-end:
 
-# Deploy
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-## Aplicação
+Por padrão, o front-end roda em `http://localhost:5173` e a API em `http://localhost:8000`.
 
-- Render
+7. Se quiser validar tudo, rode os testes:
 
-## Banco de dados
+```bash
+cd pac
+python manage.py test
 
-- PostgreSQL no Supabase
+cd ../frontend
+npm test
+```
 
----
+## Como usar o projeto
 
-# Observação institucional
+Depois de iniciar os dois servidores, acesse o front-end, faça login e use os módulos principais para cadastrar demandas, revisar itens do catálogo, validar ou devolver solicitações e acompanhar os indicadores no dashboard. Se quiser, inclua aqui capturas de tela dos fluxos mais importantes.
 
-Render e Supabase serão utilizados inicialmente para desenvolvimento, testes e MVP. A infraestrutura definitiva deverá ser validada com a STI/UFPI conforme políticas institucionais de segurança, disponibilidade e gestão de dados.
+## Como contribuir
 
----
+1. Faça um fork do projeto.
+2. Crie uma branch para sua alteração.
+3. Implemente a mudança e valide localmente.
+4. Abra uma pull request explicando o que foi alterado.
 
-# Equipe
+Se a contribuição for grande, vale abrir uma issue antes para alinhar o escopo.
 
-Projeto desenvolvido para apoio ao gerenciamento do Plano Anual de Contratações da UFPI.
+## Estrutura de pastas
+
+- `pac/`: back-end Django, apps, rotas e configuração principal.
+- `frontend/`: SPA em React com testes e configuração do Vite.
+- `docs/`: documentação do projeto e dos fluxos.
+- `templates/`: templates HTML do Django.
+- `static/`: arquivos estáticos servidos pela aplicação.
+- `Dockerfile`: imagem de produção para back-end e front-end.
+- `requirements.txt`: dependências Python do projeto.
+- `ruff.toml`: configuração de lint do Python.

@@ -56,5 +56,13 @@ class Usuario(AbstractUser):
 
     REQUIRED_FIELDS = ["email", "siape"]
 
+    @property
+    def is_admin_user(self):
+        return self.perfil in [Perfil.ADMIN, Perfil.ADMIN_MASTER] or self.is_superuser
+
+    @property
+    def is_admin_master_user(self):
+        return self.perfil == Perfil.ADMIN_MASTER or self.is_superuser
+
     def __str__(self):
         return self.first_name

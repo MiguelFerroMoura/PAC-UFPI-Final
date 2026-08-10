@@ -4,7 +4,6 @@ Django settings for PAC UFPI.
 Configurações do projeto PAC - Plano Anual de Contratações da UFPI.
 """
 
-import os
 from pathlib import Path
 
 from decouple import config
@@ -37,7 +36,12 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
 
+    # Terceiros
+    'rest_framework',
+    'corsheaders',
+
     # Apps do PAC
+    'apps.api',
     'apps.usuarios',
     'apps.unidades',
     'apps.grupos_contratacao',
@@ -57,6 +61,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -141,6 +146,13 @@ STATIC_URL = '/static/'
 
 STATICFILES_DIRS = [BASE_DIR / 'static']
 
+# Em produção, o build do front-end React (Vite) é copiado para
+# `frontend_build/` (ver Dockerfile) e servido como estático pelo WhiteNoise.
+# O diretório só existe na imagem de produção; localmente é ignorado.
+_frontend_build = BASE_DIR / 'frontend_build'
+if _frontend_build.exists():
+    STATICFILES_DIRS.append(_frontend_build)
+
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 STORAGES = {
@@ -177,3 +189,39 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 ADMIN_SITE_HEADER = 'PAC UFPI — Administração'
 ADMIN_SITE_TITLE = 'PAC UFPI Admin'
 ADMIN_INDEX_TITLE = 'Painel de Administração'
+
+
+# =============================================================================
+# Django REST Framework — API consumida pelo front-end React
+# =============================================================================
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.SessionAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 20,
+    'DEFAULT_RENDERER_CLASSES': [
+        'rest_framework.renderers.JSONRenderer',
+        'rest_framework.renderers.BrowsableAPIRenderer',
+    ],
+}
+
+
+# =============================================================================
+# CORS — permite que o front-end React (Vite) consuma a API
+# =============================================================================
+
+CORS_ALLOWED_ORIGINS = config(
+    'CORS_ALLOWED_ORIGINS',
+    default='http://localhost:5173,http://127.0.0.1:5173',
+    cast=lambda v: [s.strip() for s in v.split(',') if s.strip()],
+)
+
+# Necessário para o envio do cookie de sessão a partir do front-end.
+CORS_ALLOW_CREDENTIALS = True
+
+CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS
