@@ -1,16 +1,19 @@
 from decimal import Decimal
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.db import transaction
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
+from .constants import pode_transicionar_demanda, pode_transicionar_item
 from .forms import DemandaForm, ItemDemandaForm
-from .models import Demanda, ItemDemanda, StatusDemanda
+from .models import Demanda, ItemDemanda, StatusDemanda, StatusItemDemanda
+from .services import sincronizar_status_macro_demanda
 
 @login_required
 def demanda_list(request):
     qs = Demanda.objects.select_related("unidade", "usuario").prefetch_related("itens")
 
-    if not request.user.is_staff and getattr(request.user, "perfil", "usuario") == "usuario":
+    if not request.user.is_admin_user:
         qs = qs.filter(usuario=request.user)
 
     return render(request, "demandas/list.html", {"demandas": qs})
@@ -23,7 +26,6 @@ def demanda_create(request):
         if form.is_valid():
             demanda = form.save(commit=False)
             demanda.usuario = request.user
-            # Tenta pegar a unidade do usuário se disponível
             demanda.unidade = getattr(request.user, "unidade", None)
             
             if not demanda.unidade:
@@ -45,8 +47,7 @@ def demanda_detail(request, pk):
         Demanda.objects.select_related("unidade", "usuario").prefetch_related("itens"),
         pk=pk,
     )
-    # Verifica permissão
-    if not request.user.is_staff and demanda.usuario != request.user:
+    if not request.user.is_admin_user and demanda.usuario != request.user:
         messages.error(request, "Você não tem permissão para ver esta demanda.")
         return redirect("demandas:lista")
         
@@ -56,9 +57,13 @@ def demanda_detail(request, pk):
 def demanda_update(request, pk):
     demanda = get_object_or_404(Demanda, pk=pk)
 
-    if not request.user.is_staff and demanda.usuario != request.user:
+    if not request.user.is_admin_user and demanda.usuario != request.user:
         messages.error(request, "Você não tem permissão para editar esta demanda.")
         return redirect("demandas:lista")
+
+    if demanda.status in [StatusDemanda.CONCLUIDA, StatusDemanda.CANCELADA]:
+        messages.error(request, "Não é permitido alterar solicitações encerradas ou canceladas.")
+        return redirect("demandas:detalhe", pk=pk)
 
     if demanda.status != StatusDemanda.RASCUNHO:
         messages.error(request, "Somente demandas em rascunho podem ser editadas.")
@@ -77,18 +82,25 @@ def demanda_update(request, pk):
 def item_create(request, demanda_pk):
     demanda = get_object_or_404(Demanda, pk=demanda_pk)
     
-    if not request.user.is_staff and demanda.usuario != request.user:
+    if not request.user.is_admin_user and demanda.usuario != request.user:
         messages.error(request, "Você não tem permissão para adicionar itens nesta demanda.")
         return redirect("demandas:lista")
+
+    if demanda.status in [StatusDemanda.CONCLUIDA, StatusDemanda.CANCELADA]:
+        messages.error(request, "Não é permitido alterar solicitações encerradas ou canceladas.")
+        return redirect("demandas:detalhe", pk=demanda.pk)
 
     form = ItemDemandaForm(request.POST or None)
 
     if request.method == "POST" and form.is_valid():
-        item = form.save(commit=False)
-        item.demanda = demanda
-        item.status = StatusDemanda.RASCUNHO
-        item.valor_total = Decimal(item.quantidade) * item.valor_estimado
-        item.save()
+        with transaction.atomic():
+            demanda_locked = Demanda.objects.select_for_update().get(pk=demanda.pk)
+            item = form.save(commit=False)
+            item.demanda = demanda_locked
+            item.status = StatusItemDemanda.RASCUNHO
+            item.valor_total = Decimal(item.quantidade) * item.valor_estimado
+            item.save()
+            sincronizar_status_macro_demanda(demanda_locked)
 
         messages.success(request, "Item adicionado.")
         return redirect("demandas:detalhe", pk=demanda.pk)
@@ -99,20 +111,27 @@ def item_create(request, demanda_pk):
 def item_update(request, pk):
     item = get_object_or_404(ItemDemanda, pk=pk)
 
-    if not request.user.is_staff and item.demanda.usuario != request.user:
+    if not request.user.is_admin_user and item.demanda.usuario != request.user:
         messages.error(request, "Você não tem permissão para editar este item.")
         return redirect("demandas:lista")
 
-    if item.demanda.status != StatusDemanda.RASCUNHO:
-        messages.error(request, "Itens só podem ser editados enquanto a demanda estiver em rascunho.")
+    if item.demanda.status in [StatusDemanda.CONCLUIDA, StatusDemanda.CANCELADA]:
+        messages.error(request, "Não é permitido alterar solicitações encerradas ou canceladas.")
+        return redirect("demandas:detalhe", pk=item.demanda_id)
+
+    if item.demanda.status != StatusDemanda.RASCUNHO and item.status != StatusItemDemanda.DEVOLVIDA:
+        messages.error(request, "Itens só podem ser editados enquanto a demanda estiver em rascunho ou devolvidos.")
         return redirect("demandas:detalhe", pk=item.demanda_id)
 
     form = ItemDemandaForm(request.POST or None, instance=item)
 
     if request.method == "POST" and form.is_valid():
-        item = form.save(commit=False)
-        item.valor_total = Decimal(item.quantidade) * item.valor_estimado
-        item.save()
+        with transaction.atomic():
+            item = form.save(commit=False)
+            item.valor_total = Decimal(item.quantidade) * item.valor_estimado
+            item.save()
+            demanda_locked = Demanda.objects.select_for_update().get(pk=item.demanda_id)
+            sincronizar_status_macro_demanda(demanda_locked)
 
         messages.success(request, "Item atualizado.")
         return redirect("demandas:detalhe", pk=item.demanda_id)
@@ -121,20 +140,29 @@ def item_update(request, pk):
 
 @login_required
 def demanda_enviar(request, pk):
-    demanda = get_object_or_404(Demanda, pk=pk)
+    with transaction.atomic():
+        demanda = Demanda.objects.select_for_update().get(pk=pk)
 
-    if not request.user.is_staff and demanda.usuario != request.user:
-        messages.error(request, "Você não tem permissão para enviar esta demanda.")
-        return redirect("demandas:lista")
+        if not request.user.is_admin_user and demanda.usuario != request.user:
+            messages.error(request, "Você não tem permissão para enviar esta demanda.")
+            return redirect("demandas:lista")
 
-    if not demanda.itens.exists():
-        messages.error(request, "Adicione pelo menos um item antes de enviar.")
-        return redirect("demandas:detalhe", pk=pk)
+        if demanda.status in [StatusDemanda.CONCLUIDA, StatusDemanda.CANCELADA]:
+            messages.error(request, "Não é permitido alterar solicitações encerradas ou canceladas.")
+            return redirect("demandas:detalhe", pk=pk)
 
-    demanda.status = StatusDemanda.AGUARDANDO_VALIDACAO
-    demanda.enviada_em = timezone.now()
-    demanda.save(update_fields=["status", "enviada_em", "atualizado_em"])
-    demanda.itens.update(status=StatusDemanda.AGUARDANDO_VALIDACAO)
+        if not demanda.itens.exists():
+            messages.error(request, "Adicione pelo menos um item antes de enviar.")
+            return redirect("demandas:detalhe", pk=pk)
+
+        if not pode_transicionar_demanda(demanda.status, StatusDemanda.AGUARDANDO_VALIDACAO):
+            messages.error(request, f"Transição inválida de {demanda.status} para {StatusDemanda.AGUARDANDO_VALIDACAO}.")
+            return redirect("demandas:detalhe", pk=pk)
+
+        demanda.enviada_em = timezone.now()
+        demanda.save(update_fields=["enviada_em", "atualizado_em"])
+        demanda.itens.update(status=StatusItemDemanda.AGUARDANDO_VALIDACAO)
+        sincronizar_status_macro_demanda(demanda)
 
     messages.success(request, "Demanda enviada para validação.")
     return redirect("demandas:detalhe", pk=pk)
