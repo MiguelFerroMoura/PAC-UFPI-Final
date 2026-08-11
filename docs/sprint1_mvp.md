@@ -251,16 +251,16 @@ Registrar neste formato:
 ### Miguel
 
 - Feito:
-Estrutura e interface do frontend revisadas.
-Interface das demandas, validações, DFDs e dashboard aprimorada.
-Componentes visuais e estados de interface padronizados.
-Responsividade básica implementada/revisada.
+ -Estrutura e interface do frontend revisadas.
+ -Interface das demandas, validações, DFDs e dashboard aprimorada.
+ -Componentes visuais e estados de interface padronizados.
+ -Responsividade básica implementada/revisada.
 
 - Em andamento:
-Integração completa das telas do catálogo com a API.
-Integração do catálogo ao formulário de demanda.
-Fluxo completo de devolução e reenvio de itens.
-Consolidação e exibição do DFD para o usuário.
+ -Integração completa das telas do catálogo com a API.
+ -Integração do catálogo ao formulário de demanda.
+ -Fluxo completo de devolução e reenvio de itens.
+ -Consolidação e exibição do DFD para o usuário.
 
 - Bloqueio: Integração final depende da confirmação das APIs/endpoints disponibilizados pelo backend.
 
